@@ -17,7 +17,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === 'capture_visible_for_crop') {
     // Tomar captura para que el content script la recorte en canvas
     const windowId = sender.tab ? sender.tab.windowId : chrome.windows.WINDOW_ID_CURRENT;
-    chrome.tabs.captureVisibleTab(windowId, { format: 'png' })
+    captureVisibleThrottled(windowId, { format: 'png' })
       .then((dataUrl) => sendResponse({ dataUrl }))
       .catch((err) => {
         console.error('Error al capturar pestaña para recorte:', err);
@@ -59,6 +59,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 });
+
+// ===========================================================================
+// LÍMITE DE CAPTURA DE CHROME
+// ===========================================================================
+
+// chrome.tabs.captureVisibleTab está limitada a unas 2 llamadas por segundo
+// (MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND). El bucle de la captura con scroll
+// pedía una por sección con sólo 200 ms de separación, se pasaba de cuota y
+// Chrome abortaba la captura entera. En páginas cortas no se notaba porque hay
+// pocas secciones; en páginas largas fallaba siempre.
+const MIN_CAPTURE_INTERVAL_MS = 600;
+let lastCaptureAt = 0;
+
+/**
+ * Captura la pestaña visible respetando la cuota, y reintentando si aun así
+ * Chrome se queja.
+ * @param {number} windowId
+ * @param {object} options
+ * @returns {Promise<string>} dataURL
+ */
+async function captureVisibleThrottled(windowId, options = { format: 'png' }) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const waitFor = MIN_CAPTURE_INTERVAL_MS - (Date.now() - lastCaptureAt);
+    if (waitFor > 0) await new Promise((r) => setTimeout(r, waitFor));
+
+    try {
+      const dataUrl = await chrome.tabs.captureVisibleTab(windowId, options);
+      lastCaptureAt = Date.now();
+      return dataUrl;
+    } catch (err) {
+      lastCaptureAt = Date.now();
+      const esCuota = /MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND/i.test(err.message || '');
+      if (!esCuota || attempt === 3) throw err;
+      console.warn(`[Gemini Bridge] Cuota de captura alcanzada. Reintento ${attempt + 1}/3.`);
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+  throw new Error('No se pudo capturar tras varios reintentos por cuota.');
+}
 
 // ===========================================================================
 // VÍNCULO ENTRE LA PESTAÑA DE TRABAJO Y LA DE GEMINI
@@ -292,7 +331,7 @@ async function captureLinkedWorkTab() {
 async function captureVisibleOfTab(tab) {
   try {
     await paintBadgesInTab(tab.id);
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+    const dataUrl = await captureVisibleThrottled(tab.windowId, { format: 'png' });
     if (!dataUrl) return { dataUrl: null, error: 'captureVisibleTab no devolvió imagen' };
     return { dataUrl, error: null };
   } catch (err) {
@@ -358,7 +397,7 @@ async function handleFullCapture() {
 
     await paintBadgesInTab(tab.id);
 
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+    const dataUrl = await captureVisibleThrottled(tab.windowId, { format: 'png' });
     if (dataUrl) {
       await sendToGemini(dataUrl, tab);
     }
@@ -452,7 +491,7 @@ async function captureScrollOfTab(tab) {
       });
 
       // Capturar la porción visible actual
-      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+      const dataUrl = await captureVisibleThrottled(tab.windowId, { format: 'png' });
 
       // Mostrar banner nuevamente para feedback visual
       await chrome.scripting.executeScript({
