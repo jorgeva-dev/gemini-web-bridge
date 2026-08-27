@@ -29,8 +29,58 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendToGemini(message.dataUrl, sender.tab);
     }
     sendResponse({ status: 'ok' });
+  } else if (message.action === 'clear_badges') {
+    clearBadgesInActiveTab();
+    sendResponse({ status: 'ok' });
   }
 });
+
+/**
+ * Numera los elementos interactivos de la pestaña antes de capturar.
+ * Las insignias quedan grabadas en la imagen y permanecen en la página, de modo
+ * que cuando Gemini responde "pulsa el 7" el usuario ve el 7 en su pantalla.
+ * @param {number} tabId
+ * @returns {Promise<number>} número de insignias pintadas
+ */
+async function paintBadgesInTab(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['content/badges.js']
+    });
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => (typeof window.__gwbPaintBadges === 'function' ? window.__gwbPaintBadges() : 0)
+    });
+    const count = results?.[0]?.result || 0;
+    console.log(`[Gemini Bridge] ${count} elementos numerados.`);
+    return count;
+  } catch (err) {
+    // Páginas internas del navegador o restringidas: seguimos sin numerar.
+    console.warn('[Gemini Bridge] No se pudieron pintar las insignias:', err.message);
+    return 0;
+  }
+}
+
+/**
+ * Quita las insignias de la pestaña activa.
+ */
+async function clearBadgesInActiveTab() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.id) return;
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ['content/badges.js']
+    });
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => { if (typeof window.__gwbClearBadges === 'function') window.__gwbClearBadges(); }
+    });
+  } catch (err) {
+    console.warn('[Gemini Bridge] No se pudieron quitar las insignias:', err.message);
+  }
+}
 
 /**
  * Flujo de captura visible de la pestaña activa
@@ -39,6 +89,8 @@ async function handleFullCapture() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab || !tab.id) return;
+
+    await paintBadgesInTab(tab.id);
 
     const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
     if (dataUrl) {
@@ -64,6 +116,11 @@ async function handleScrollCapture() {
       console.warn('No se pueden inyectar scripts en páginas internas del navegador.');
       return;
     }
+
+    // 0. Numerar una sola vez, antes de empezar a hacer scroll. Las insignias se
+    // posicionan en coordenadas de documento, así que acompañan al contenido en
+    // cada rebanada sin que los números se repitan entre ellas.
+    await paintBadgesInTab(tab.id);
 
     // 1. Preparar la página, calcular altura real y posiciones de scroll
     const initResults = await chrome.scripting.executeScript({
@@ -381,6 +438,8 @@ async function handleCropCapture() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab || !tab.id) return;
 
+    await paintBadgesInTab(tab.id);
+
     // Inyectar estilos del overlay
     await chrome.scripting.insertCSS({
       target: { tabId: tab.id },
@@ -462,7 +521,7 @@ async function injectInjectorScript(tabId, dataUrl) {
  * Función que se ejecuta dentro del contexto de la página de Gemini
  */
 async function executeGeminiInjection(dataUrl) {
-  const PREDEFINED_TEXT = "Revisa la captura de pantalla adjunta. A continuación te haré una pregunta sobre ella. Si tu respuesta implica que debo hacer clic, interactuar o fijarme en un elemento concreto de la interfaz, dime exactamente dónde está usando referencias visuales precisas (arriba, abajo, colores, elementos cercanos). Aquí va mi pregunta: ";
+  const PREDEFINED_TEXT = "Revisa la captura de pantalla adjunta. Los elementos con los que se puede interactuar (campos, botones, enlaces, desplegables) están numerados en la imagen con una insignia roja en su esquina superior izquierda. IMPORTANTE: cuando tu respuesta implique que yo deba hacer clic, escribir o fijarme en algo concreto, refiérete SIEMPRE al número de su insignia. Por ejemplo: \"escribe tu nombre en el 4, el correo en el 7 y luego pulsa el 12\". No describas la posición con palabras (nada de \"arriba a la derecha\" o \"el botón azul\"): usa el número, que yo lo estoy viendo en mi pantalla. Si tengo que rellenar un campo, dime su número y el texto exacto que debo poner. Aquí va mi pregunta: ";
 
   function dataURLtoFile(dataUrlString, filename = 'screenshot.png') {
     const parts = dataUrlString.split(',');
