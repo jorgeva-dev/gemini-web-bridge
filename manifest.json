@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Gemini Web Bridge",
+  "version": "1.0.0",
+  "description": "Captura pantallas (completas o parciales) e inyéctalas directamente en la caja de chat de Google Gemini con un prompt estructurado.",
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "*://gemini.google.com/*"
+  ],
+  "background": {
+    "service_worker": "background/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Gemini Web Bridge",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

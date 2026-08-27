@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gemini Web Bridge</title>
+  <link rel="stylesheet" href="popup.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="card">
+    <header class="header">
+      <div class="logo-wrapper">
+        <svg class="gemini-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 2C12 7.52285 7.52285 12 2 12C7.52285 12 12 16.4771 12 22C12 16.4771 16.4771 12 22 12C16.4771 12 12 7.52285 12 2Z" fill="url(#sparkle-gradient)"/>
+          <defs>
+            <linearGradient id="sparkle-gradient" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#4E8CFF"/>
+              <stop offset="0.5" stop-color="#9B51E0"/>
+              <stop offset="1" stop-color="#FF6492"/>
+            </linearGradient>
+          </defs>
+        </svg>
+        <span class="brand-name">Gemini <span>Bridge</span></span>
+      </div>
+      <span class="status-pill">Ready</span>
+    </header>
+
+    <div class="divider"></div>
+
+    <main class="actions">
+      <button id="btn-full" class="btn btn-primary" type="button">
+        <div class="btn-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+            <line x1="8" y1="21" x2="16" y2="21"></line>
+            <line x1="12" y1="17" x2="12" y2="21"></line>
+          </svg>
+        </div>
+        <div class="btn-text">
+          <span class="btn-title">Pantalla Visible</span>
+          <span class="btn-desc">Captura el área visible actual</span>
+        </div>
+        <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="9 18 15 12 9 6"></polyline>
+        </svg>
+      </button>
+
+      <button id="btn-scroll" class="btn btn-tertiary" type="button">
+        <div class="btn-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="5" y="2" width="14" height="20" rx="3"></rect>
+            <path d="M12 6v12"></path>
+            <path d="m9 15 3 3 3-3"></path>
+          </svg>
+        </div>
+        <div class="btn-text">
+          <span class="btn-title">Página Completa</span>
+          <span class="btn-desc">Captura con scroll hasta abajo</span>
+        </div>
+        <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="9 18 15 12 9 6"></polyline>
+        </svg>
+      </button>
+
+      <button id="btn-crop" class="btn btn-secondary" type="button">
+        <div class="btn-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M6 2v14a2 2 0 0 0 2 2h14"></path>
+            <path d="M18 22V8a2 2 0 0 0-2-2H2"></path>
+          </svg>
+        </div>
+        <div class="btn-text">
+          <span class="btn-title">Captura Parcial</span>
+          <span class="btn-desc">Selecciona un área específica</span>
+        </div>
+        <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="9 18 15 12 9 6"></polyline>
+        </svg>
+      </button>
+    </main>
+
+    <footer class="footer">
+      <span>Inyecta automáticamente en Gemini</span>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
