@@ -389,6 +389,17 @@ async function paintBadgesInTab(tabId) {
   }
 }
 
+// Atajos de teclado: renumerar se necesita justo cuando estás mirando la
+// página y acabas de desplegar algo, no cuando te apetece abrir el popup.
+chrome.commands.onCommand.addListener(async (command) => {
+  if (command === 'repaint_badges') {
+    const n = await repaintBadgesInActiveTab();
+    console.log(`[Gemini Bridge] Renumerado por atajo: ${n} elementos.`);
+  } else if (command === 'clear_badges') {
+    await clearBadgesInActiveTab();
+  }
+});
+
 /**
  * Vuelve a numerar la pestaña activa. Las insignias se colocan en coordenadas
  * fijas del documento, así que al desplegar un menú o mover algo se quedan
