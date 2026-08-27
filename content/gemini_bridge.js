@@ -14,8 +14,28 @@
  * escribir a Gemini: de ahí esa salida, el interruptor AUTO OFF y el Escape.
  */
 (function () {
-  if (window.__gwbBridgeLoaded) return;
+  // Al recargar la extensión, el puente ya inyectado en la página sobrevive
+  // pero se queda huérfano: su contexto muere y toda llamada a chrome.* lanza
+  // "Extension context invalidated". Una guarda booleana impedía además que un
+  // puente nuevo relevara al viejo. Con un contador de generación, el último
+  // inyectado manda y los anteriores se apartan solos.
+  const myGeneration = (window.__gwbGeneration || 0) + 1;
+  window.__gwbGeneration = myGeneration;
   window.__gwbBridgeLoaded = true;
+
+  /** ¿Sigue vivo el contexto de la extensión que inyectó ESTE script? */
+  function contextAlive() {
+    try {
+      return Boolean(chrome.runtime && chrome.runtime.id);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** ¿Sigue siendo este el puente vigente de la página? */
+  function isCurrent() {
+    return window.__gwbGeneration === myGeneration;
+  }
 
   // La captura de página completa recorre la página en trozos y Chrome limita
   // captureVisibleTab a unas dos llamadas por segundo, así que una página larga
@@ -245,6 +265,12 @@
     // enteraba de que había fallado nada.
     if (!dataUrl) {
       console.warn('[Gemini Bridge] Captura fallida:', failReason);
+      if (/context invalidated/i.test(failReason || '')) {
+        renderBar('♻️ La extensión se recargó — pulsa F5 en esta pestaña');
+        skipNext = true;
+        busy = false;
+        return;
+      }
       renderBar(`⚠️ Sin captura (${failReason}). Enter otra vez para enviar igual`);
       skipNext = true;
       busy = false;
@@ -280,8 +306,16 @@
   }, true);
 
   document.addEventListener('keydown', (e) => {
+    if (!isCurrent()) return; // relevado por un puente más nuevo
     if (passThrough || busy || !autoEnabled) return;
     if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+
+    // Si la extensión se ha recargado, este script ya no puede capturar nada.
+    // Dejamos pasar el Enter en vez de bloquear el envío, y decimos qué hacer.
+    if (!contextAlive()) {
+      renderBar('♻️ Extensión recargada — pulsa F5 en esta pestaña');
+      return;
+    }
 
     // Tras un fallo de captura, el siguiente Enter envía sin interceptar: es la
     // salida del usuario para mandar el mensaje igualmente si así lo decide.

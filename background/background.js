@@ -105,6 +105,12 @@ async function captureVisibleThrottled(windowId, options = { format: 'png' }) {
 
 const GEMINI_URL = 'https://gemini.google.com/app';
 
+// Por defecto chrome.storage.session sólo es legible desde contextos de
+// confianza, así que el puente inyectado en la página no podía guardar el
+// estado del interruptor AUTO: fallaba en silencio y volvía a ON en cada carga.
+chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS' })
+  .catch((err) => console.warn('[Gemini Bridge] No se pudo abrir storage.session al puente:', err.message));
+
 /**
  * Devuelve las pestañas de Gemini abiertas, para que el usuario elija con cuál
  * vincularse en vez de que la extensión decida por él.
