@@ -33,9 +33,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     clearBadgesInActiveTab();
     sendResponse({ status: 'ok' });
   } else if (message.action === 'link_tabs') {
-    linkTabs()
+    linkTabs({ mode: message.mode, geminiTabId: message.geminiTabId })
       .then((res) => sendResponse(res))
       .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
+  } else if (message.action === 'list_gemini_tabs') {
+    listGeminiTabs()
+      .then((tabs) => sendResponse({ tabs }))
+      .catch(() => sendResponse({ tabs: [] }));
     return true;
   } else if (message.action === 'unlink_tabs') {
     unlinkTabs()
@@ -62,11 +67,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 const GEMINI_URL = 'https://gemini.google.com/app';
 
 /**
- * Vincula la pestaña activa (trabajo) con una pestaña de Gemini, abriéndola a
- * su derecha si no existe ya. Sustituye a la heurística anterior de "la
- * pestaña de al lado", que dependía del orden en que estuvieran colocadas.
+ * Devuelve las pestañas de Gemini abiertas, para que el usuario elija con cuál
+ * vincularse en vez de que la extensión decida por él.
+ * @returns {Promise<Array<{id:number, title:string, active:boolean}>>}
  */
-async function linkTabs() {
+async function listGeminiTabs() {
+  const tabs = await chrome.tabs.query({ url: '*://gemini.google.com/*' });
+  return tabs.map((t) => ({
+    id: t.id,
+    title: t.title || 'Gemini',
+    active: Boolean(t.active)
+  }));
+}
+
+/**
+ * Vincula la pestaña activa (trabajo) con una pestaña de Gemini.
+ * @param {{mode?: 'new'|'existing', geminiTabId?: number|null}} opciones
+ *   mode 'new' abre una conversación nueva; 'existing' se engancha a la
+ *   pestaña que indique geminiTabId. Sustituye a la heurística anterior de "la
+ *   pestaña de al lado", que dependía del orden en que estuvieran colocadas.
+ */
+async function linkTabs({ mode = 'new', geminiTabId = null } = {}) {
   const [workTab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!workTab || !workTab.id) return { ok: false, error: 'No hay pestaña activa.' };
 
@@ -78,14 +99,22 @@ async function linkTabs() {
     return { ok: false, error: 'Vincula la pestaña de trabajo, no la de Gemini.' };
   }
 
-  // Reutilizar una pestaña de Gemini de la misma ventana si ya está abierta
-  const existing = await chrome.tabs.query({
-    url: '*://gemini.google.com/*',
-    windowId: workTab.windowId
-  });
+  // La pestaña de Gemini la elige el usuario de forma explícita. Reutilizar en
+  // silencio una conversación ya abierta secuestraba un chat en curso sin que
+  // se notara nada.
+  let geminiTab = null;
 
-  let geminiTab = existing[0];
-  if (!geminiTab) {
+  if (mode === 'existing') {
+    if (!geminiTabId) return { ok: false, error: 'No se indicó qué pestaña de Gemini usar.' };
+    try {
+      geminiTab = await chrome.tabs.get(geminiTabId);
+    } catch (e) {
+      return { ok: false, error: 'Esa pestaña de Gemini ya no existe.' };
+    }
+    if (!geminiTab.url || !geminiTab.url.includes('gemini.google.com')) {
+      return { ok: false, error: 'Esa pestaña ya no es de Gemini.' };
+    }
+  } else {
     geminiTab = await chrome.tabs.create({
       url: GEMINI_URL,
       index: workTab.index + 1,
@@ -105,6 +134,12 @@ async function linkTabs() {
   });
 
   await injectBridge(geminiTab.id, workTab.title || '');
+
+  // Llevar al usuario a Gemini: es donde va a escribir, y además hace visible
+  // qué pestaña ha quedado vinculada. Crearla en segundo plano daba la
+  // sensación de que el botón no había hecho nada.
+  await chrome.tabs.update(geminiTab.id, { active: true });
+  await chrome.windows.update(geminiTab.windowId, { focused: true }).catch(() => {});
 
   return {
     ok: true,

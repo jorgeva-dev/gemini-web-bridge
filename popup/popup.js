@@ -7,6 +7,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const linkDot = document.getElementById('link-dot');
   const linkText = document.getElementById('link-text');
 
+  const linkChooser = document.getElementById('link-chooser');
+  const existingList = document.getElementById('existing-list');
+  const btnLinkNew = document.getElementById('btn-link-new');
+  const btnChooserCancel = document.getElementById('btn-chooser-cancel');
+
   let isLinked = false;
 
   function renderLinkState(status) {
@@ -34,16 +39,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   })();
 
-  btnLink.addEventListener('click', async () => {
+  /**
+   * Ejecuta el vínculo. La pestaña de Gemini la elige el usuario: antes se
+   * reutilizaba en silencio la primera que hubiera abierta, lo que secuestraba
+   * una conversación en curso sin avisar.
+   */
+  async function doLink(mode, geminiTabId) {
     try {
-      if (isLinked) {
-        await chrome.runtime.sendMessage({ action: 'unlink_tabs' });
-        renderLinkState({ linked: false });
-        return;
-      }
+      linkChooser.classList.add('hidden');
+      linkText.textContent = 'Vinculando…';
 
-      btnLink.textContent = 'Vinculando…';
-      const res = await chrome.runtime.sendMessage({ action: 'link_tabs' });
+      const res = await chrome.runtime.sendMessage({ action: 'link_tabs', mode, geminiTabId });
 
       if (res && res.ok) {
         renderLinkState({ linked: true, workTitle: res.workTitle });
@@ -54,9 +60,60 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } catch (err) {
       console.error('Error vinculando pestañas:', err);
+      linkText.textContent = 'Error al vincular';
       btnLink.textContent = 'Reintentar';
     }
+  }
+
+  async function openChooser() {
+    existingList.innerHTML = '';
+
+    let tabs = [];
+    try {
+      const res = await chrome.runtime.sendMessage({ action: 'list_gemini_tabs' });
+      tabs = (res && res.tabs) || [];
+    } catch (err) {
+      console.error('Error listando pestañas de Gemini:', err);
+    }
+
+    tabs.forEach((t) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chooser-option';
+      btn.title = t.title;
+
+      const icon = document.createElement('span');
+      icon.className = 'chooser-icon';
+      icon.textContent = '↳';
+
+      const label = document.createElement('span');
+      label.className = 'chooser-label';
+      label.textContent = t.title;
+
+      btn.appendChild(icon);
+      btn.appendChild(label);
+      btn.addEventListener('click', () => doLink('existing', t.id));
+      existingList.appendChild(btn);
+    });
+
+    linkChooser.classList.remove('hidden');
+  }
+
+  btnLink.addEventListener('click', async () => {
+    if (isLinked) {
+      try {
+        await chrome.runtime.sendMessage({ action: 'unlink_tabs' });
+      } catch (err) {
+        console.error('Error desvinculando:', err);
+      }
+      renderLinkState({ linked: false });
+      return;
+    }
+    await openChooser();
   });
+
+  btnLinkNew.addEventListener('click', () => doLink('new', null));
+  btnChooserCancel.addEventListener('click', () => linkChooser.classList.add('hidden'));
 
   btnFull.addEventListener('click', async () => {
     try {
