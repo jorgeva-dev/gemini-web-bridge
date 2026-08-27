@@ -56,6 +56,13 @@
   let skipNext = false;
   let workTabTitle = '';
   let captureMode = 'visible'; // 'visible' | 'full'
+  let primed = false;
+
+  // En el flujo automático el usuario escribe su propia pregunta, así que Gemini
+  // no recibía ninguna explicación de qué son las insignias ni cómo referirse a
+  // ellas: de ahí que respondiera narrando el nombre del archivo. Se le explica
+  // una sola vez por conversación, para no ensuciar todos los mensajes.
+  const PRIMER = '\n\n[Contexto para ti: la imagen adjunta es una captura de mi pantalla. Sus elementos interactivos (campos, botones, enlaces) llevan una insignia roja numerada. Cuando me digas dónde pulsar o qué rellenar, cita SIEMPRE ese número, nunca la posición ("arriba a la derecha") ni el nombre del archivo adjunto, que no debes mencionar. Mantén esta pauta durante toda la conversación.]';
 
   // ---------------------------------------------------------------- utilidades
 
@@ -214,8 +221,11 @@
 
     composer.focus();
 
+    // El nombre debe corresponder al tipo real: el montaje sale en JPEG y
+    // llamarlo .png confundía tanto a Gemini como a quien lea la conversación.
+    const esJpeg = /^data:image\/jpe?g/i.test(dataUrl);
     const dt = new DataTransfer();
-    dt.items.add(dataURLtoFile(dataUrl, 'captura.png'));
+    dt.items.add(dataURLtoFile(dataUrl, esJpeg ? 'pantalla.jpg' : 'pantalla.png'));
 
     composer.dispatchEvent(new ClipboardEvent('paste', {
       bubbles: true,
@@ -317,6 +327,23 @@
       skipNext = true;
       busy = false;
       return;
+    }
+
+    if (!primed) {
+      const composer = findComposer();
+      if (composer) {
+        composer.focus();
+        const range = document.createRange();
+        range.selectNodeContents(composer);
+        range.collapse(false);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        document.execCommand('insertText', false, PRIMER);
+        composer.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      primed = true;
+      chrome.storage.session.set({ gwb_primed: true }).catch(() => {});
     }
 
     renderBar('📎 Adjuntando…');
@@ -424,10 +451,11 @@
 
   (async () => {
     try {
-      const stored = await chrome.storage.session.get(['gwb_auto_enabled', 'gwb_work_tab_title', 'gwb_capture_mode']);
+      const stored = await chrome.storage.session.get(['gwb_auto_enabled', 'gwb_work_tab_title', 'gwb_capture_mode', 'gwb_primed']);
       autoEnabled = stored.gwb_auto_enabled !== false;
       workTabTitle = stored.gwb_work_tab_title || '';
       captureMode = stored.gwb_capture_mode === 'full' ? 'full' : 'visible';
+      primed = stored.gwb_primed === true;
     } catch (e) { /* valores por defecto */ }
     renderBar();
   })();

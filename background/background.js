@@ -181,7 +181,8 @@ async function linkTabs({ mode = 'new', geminiTabId = null } = {}) {
     gwb_work_tab_title: workTab.title || 'pestaña de trabajo',
     gwb_gemini_tab_title: geminiTab.title || 'Gemini',
     gwb_last_error: null,
-    gwb_auto_enabled: true
+    gwb_auto_enabled: true,
+    gwb_primed: false
   });
 
   await injectBridge(geminiTab.id, workTab.title || '');
@@ -258,7 +259,8 @@ async function unlinkTabs() {
     'gwb_gemini_tab_id',
     'gwb_work_tab_title',
     'gwb_gemini_tab_title',
-    'gwb_last_error'
+    'gwb_last_error',
+    'gwb_primed'
   ]);
 }
 
@@ -381,7 +383,14 @@ async function paintBadgesInTab(tabId) {
     });
     const results = await chrome.scripting.executeScript({
       target: { tabId },
-      func: () => (typeof window.__gwbPaintBadges === 'function' ? window.__gwbPaintBadges() : 0)
+      func: async () => {
+        const n = typeof window.__gwbPaintBadges === 'function' ? window.__gwbPaintBadges() : 0;
+        // Insertar los nodos no basta: hay que dejar que el navegador los pinte
+        // de verdad antes de fotografiar, o la primera captura sale sin números.
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        await new Promise((r) => setTimeout(r, 120));
+        return n;
+      }
     });
     const count = results?.[0]?.result || 0;
     console.log(`[Gemini Bridge] ${count} elementos numerados.`);
