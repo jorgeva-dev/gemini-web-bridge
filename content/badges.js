@@ -54,7 +54,7 @@
    * Pinta las insignias numeradas. Devuelve cuántas ha puesto.
    * @returns {number}
    */
-  function paintBadges() {
+  let paintBadges = function paintBadges() {
     removeLayer();
 
     const layer = document.createElement('div');
@@ -140,7 +140,7 @@
     document.documentElement.appendChild(layer);
     window.__gwbBadgeMap = map;
     return n;
-  }
+  };
 
   /**
    * Quita las insignias y los atributos que dejaron.
@@ -151,6 +151,85 @@
     window.__gwbBadgeMap = null;
   }
 
-  window.__gwbPaintBadges = paintBadges;
-  window.__gwbClearBadges = clearBadges;
+  // -------------------------------------------------------- realineado automático
+
+  // Un temporizador fijo (cada 2s) repintaría constantemente aunque no cambie
+  // nada, y cada repintado pide getBoundingClientRect de todos los elementos, lo
+  // que fuerza recálculo de layout. En una página pesada se nota. Observar los
+  // cambios reales es casi gratis cuando la página está quieta y reacciona al
+  // instante cuando despliegas un menú o se carga contenido.
+  const REALIGN_DEBOUNCE_MS = 400;
+
+  let mutationObserver = null;
+  let resizeObserver = null;
+  let realignTimer = null;
+
+  function scheduleRealign() {
+    clearTimeout(realignTimer);
+    realignTimer = setTimeout(() => {
+      if (!document.getElementById(CONTAINER_ID)) return; // las han quitado
+      paintBadges();
+    }, REALIGN_DEBOUNCE_MS);
+  }
+
+  function startAutoRealign() {
+    stopAutoRealign();
+
+    mutationObserver = new MutationObserver((records) => {
+      // Ignorar lo que provocamos nosotros al pintar, o sería un bucle infinito
+      for (const r of records) {
+        const t = r.target;
+        if (t && t.nodeType === 1 && t.closest && t.closest(`#${CONTAINER_ID}`)) continue;
+        scheduleRealign();
+        return;
+      }
+    });
+    mutationObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['style', 'class', 'hidden', 'open']
+    });
+
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(scheduleRealign);
+      resizeObserver.observe(document.documentElement);
+    }
+
+    window.addEventListener('resize', scheduleRealign, { passive: true });
+  }
+
+  function stopAutoRealign() {
+    clearTimeout(realignTimer);
+    if (mutationObserver) { mutationObserver.disconnect(); mutationObserver = null; }
+    if (resizeObserver) { resizeObserver.disconnect(); resizeObserver = null; }
+    window.removeEventListener('resize', scheduleRealign);
+  }
+
+  // Envolver el pintado para que el observador no se oiga a sí mismo
+  const rawPaint = paintBadges;
+  paintBadges = function () {
+    if (mutationObserver) mutationObserver.disconnect();
+    const n = rawPaint();
+    if (mutationObserver) {
+      mutationObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['style', 'class', 'hidden', 'open']
+      });
+    }
+    return n;
+  };
+
+  window.__gwbPaintBadges = function () {
+    const n = paintBadges();
+    startAutoRealign();
+    return n;
+  };
+
+  window.__gwbClearBadges = function () {
+    stopAutoRealign();
+    clearBadges();
+  };
 })();

@@ -23,6 +23,12 @@
   window.__gwbGeneration = myGeneration;
   window.__gwbBridgeLoaded = true;
 
+  // Al relevar a un puente anterior hay que tirar su píldora: ensureBar reutiliza
+  // la que encuentre, así que una barra construida por una versión vieja se daba
+  // por buena y nunca llegaba a mostrar los controles añadidos después.
+  const staleBar = document.getElementById('gwb-bridge-bar');
+  if (staleBar) staleBar.remove();
+
   /** ¿Sigue vivo el contexto de la extensión que inyectó ESTE script? */
   function contextAlive() {
     try {
