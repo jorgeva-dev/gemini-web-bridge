@@ -58,7 +58,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch(() => sendResponse({ linked: false }));
     return true;
   } else if (message.action === 'request_capture') {
-    captureLinkedWorkTab()
+    captureLinkedWorkTab(message.mode)
       .then((res) => sendResponse(res))
       .catch((err) => sendResponse({ error: err.message }));
     return true;
@@ -181,7 +181,6 @@ async function linkTabs({ mode = 'new', geminiTabId = null } = {}) {
     gwb_work_tab_title: workTab.title || 'pestaña de trabajo',
     gwb_gemini_tab_title: geminiTab.title || 'Gemini',
     gwb_last_error: null,
-    gwb_last_captured_url: null,
     gwb_auto_enabled: true
   });
 
@@ -252,11 +251,14 @@ async function unlinkTabs() {
   if (gwb_gemini_tab_id) {
     chrome.tabs.sendMessage(gwb_gemini_tab_id, { action: 'bridge_unlink' }).catch(() => {});
   }
+  // gwb_capture_mode no se borra: es una preferencia del usuario, no parte del
+  // vínculo, y perderla en cada desvinculación sería molesto.
   await chrome.storage.session.remove([
     'gwb_work_tab_id',
     'gwb_gemini_tab_id',
     'gwb_work_tab_title',
-    'gwb_last_captured_url'
+    'gwb_gemini_tab_title',
+    'gwb_last_error'
   ]);
 }
 
@@ -291,8 +293,8 @@ async function getLinkStatus() {
  * mandarse la completa.
  * @returns {Promise<{dataUrl: string|null, mode: string, error?: string}>}
  */
-async function captureLinkedWorkTab() {
-  const s = await chrome.storage.session.get(['gwb_work_tab_id', 'gwb_last_captured_url']);
+async function captureLinkedWorkTab(requestedMode = 'visible') {
+  const s = await chrome.storage.session.get(['gwb_work_tab_id']);
   if (!s.gwb_work_tab_id) return { error: 'No hay ninguna pestaña vinculada.' };
 
   let workTab;
@@ -303,8 +305,10 @@ async function captureLinkedWorkTab() {
     return { error: 'La pestaña vinculada ya no existe.' };
   }
 
-  const urlChanged = workTab.url !== s.gwb_last_captured_url;
-  const mode = urlChanged ? 'scroll' : 'visible';
+  // El alcance lo elige el usuario desde la píldora. La heurística anterior
+  // —completa la primera vez sobre cada URL— era impredecible: la mayoría de
+  // las consultas se responden con lo visible, que además es instantáneo.
+  const mode = requestedMode === 'full' ? 'scroll' : 'visible';
 
   // captureVisibleTab sólo puede fotografiar la pestaña ACTIVA de la ventana.
   // Como el usuario está escribiendo en Gemini, hay que traer al frente la
@@ -343,7 +347,7 @@ async function captureLinkedWorkTab() {
 
   const dataUrl = result.dataUrl;
 
-  await chrome.storage.session.set({ gwb_last_captured_url: workTab.url, gwb_last_error: null });
+  await chrome.storage.session.set({ gwb_last_error: null });
   return { dataUrl, mode };
 }
 

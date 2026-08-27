@@ -49,6 +49,7 @@
   let passThrough = false;
   let skipNext = false;
   let workTabTitle = '';
+  let captureMode = 'visible'; // 'visible' | 'full'
 
   // ---------------------------------------------------------------- utilidades
 
@@ -143,7 +144,29 @@
       renderBar();
     });
 
+    // Selector de alcance de la captura. La mayoría de las consultas se
+    // responden con lo que hay en pantalla, que además es instantáneo; la
+    // página entera sólo hace falta cuando Gemini pide ver más.
+    const modeBtn = document.createElement('button');
+    modeBtn.id = 'gwb-bridge-mode';
+    modeBtn.type = 'button';
+    modeBtn.style.cssText = [
+      'all:unset',
+      'cursor:pointer',
+      'padding:3px 9px',
+      'border-radius:6px',
+      'background:rgba(255,255,255,.08)',
+      'color:#cbd5e1',
+      'font:600 11px/1.4 ui-sans-serif,system-ui,sans-serif'
+    ].join(';');
+    modeBtn.addEventListener('click', () => {
+      captureMode = captureMode === 'visible' ? 'full' : 'visible';
+      chrome.storage.session.set({ gwb_capture_mode: captureMode }).catch(() => {});
+      renderBar();
+    });
+
     bar.appendChild(label);
+    bar.appendChild(modeBtn);
     bar.appendChild(toggle);
     document.body.appendChild(bar);
     return bar;
@@ -155,6 +178,17 @@
     const toggle = bar.querySelector('#gwb-bridge-toggle');
 
     label.textContent = statusText || (workTabTitle ? `🔗 ${workTabTitle}` : '🔗 Pestaña vinculada');
+
+    const modeBtn = bar.querySelector('#gwb-bridge-mode');
+    if (modeBtn) {
+      const esCompleta = captureMode === 'full';
+      modeBtn.textContent = esCompleta ? '📜 PÁGINA' : '🖥 VISIBLE';
+      modeBtn.title = esCompleta
+        ? 'Envía la página entera haciendo scroll. Más contexto, tarda unos segundos. Pulsa para cambiar.'
+        : 'Envía sólo lo que se ve. Instantáneo. Pulsa para cambiar.';
+      modeBtn.style.background = esCompleta ? 'rgba(78,140,255,.18)' : 'rgba(255,255,255,.08)';
+      modeBtn.style.color = esCompleta ? '#7dabff' : '#cbd5e1';
+    }
 
     toggle.textContent = autoEnabled ? 'AUTO ON' : 'AUTO OFF';
     toggle.style.background = autoEnabled ? 'rgba(46,213,115,.18)' : 'rgba(255,255,255,.08)';
@@ -234,16 +268,16 @@
 
     // La primera captura sobre una URL recorre la página entera y tarda. Sin
     // este aviso parece que la extensión se ha colgado.
-    const slowNotice = setTimeout(() => {
-      if (busy) renderBar('📜 Recorriendo la página completa…');
-    }, 2500);
+    const slowNotice = captureMode === 'full'
+      ? setTimeout(() => { if (busy) renderBar('📜 Recorriendo la página completa…'); }, 2000)
+      : null;
 
     let dataUrl = null;
     let failReason = null;
 
     try {
       const response = await Promise.race([
-        chrome.runtime.sendMessage({ action: 'request_capture' }),
+        chrome.runtime.sendMessage({ action: 'request_capture', mode: captureMode }),
         sleep(TIMEOUT_MS).then(() => ({ timeout: true }))
       ]);
 
@@ -260,7 +294,7 @@
       failReason = err.message;
     }
 
-    clearTimeout(slowNotice);
+    if (slowNotice) clearTimeout(slowNotice);
 
     // Si no hay imagen NO enviamos. Mandar el mensaje igualmente dejaba a Gemini
     // contestando a ciegas sobre una pantalla que nunca vio, y el usuario no se
@@ -384,9 +418,10 @@
 
   (async () => {
     try {
-      const stored = await chrome.storage.session.get(['gwb_auto_enabled', 'gwb_work_tab_title']);
+      const stored = await chrome.storage.session.get(['gwb_auto_enabled', 'gwb_work_tab_title', 'gwb_capture_mode']);
       autoEnabled = stored.gwb_auto_enabled !== false;
       workTabTitle = stored.gwb_work_tab_title || '';
+      captureMode = stored.gwb_capture_mode === 'full' ? 'full' : 'visible';
     } catch (e) { /* valores por defecto */ }
     renderBar();
   })();
