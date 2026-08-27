@@ -6,6 +6,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnLink = document.getElementById('btn-link');
   const linkDot = document.getElementById('link-dot');
   const linkText = document.getElementById('link-text');
+  const linkGemini = document.getElementById('link-gemini');
+  const linkError = document.getElementById('link-error');
 
   const linkChooser = document.getElementById('link-chooser');
   const existingList = document.getElementById('existing-list');
@@ -16,18 +18,32 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function renderLinkState(status) {
     isLinked = Boolean(status && status.linked);
+
     if (isLinked) {
+      // Mostrar los dos extremos del vínculo: enseñar sólo uno no dejaba claro
+      // con qué conversación de Gemini se había emparejado la página.
       linkDot.classList.add('on');
-      linkText.textContent = status.workTitle || 'Pestaña vinculada';
+      linkText.textContent = `📄 ${status.workTitle || 'Pestaña de trabajo'}`;
       linkText.title = status.workTitle || '';
+      linkGemini.textContent = `✦ ${status.geminiTitle || 'Gemini'}`;
+      linkGemini.title = status.geminiTitle || '';
       btnLink.textContent = 'Desvincular';
       btnLink.classList.add('unlink');
     } else {
       linkDot.classList.remove('on');
       linkText.textContent = 'Sin vincular';
       linkText.title = '';
+      linkGemini.textContent = '';
+      linkGemini.title = '';
       btnLink.textContent = 'Vincular con Gemini';
       btnLink.classList.remove('unlink');
+    }
+
+    if (status && status.lastError) {
+      linkError.textContent = `Último fallo de captura — ${status.lastError}`;
+      linkError.classList.remove('hidden');
+    } else {
+      linkError.classList.add('hidden');
     }
   }
 

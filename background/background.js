@@ -168,6 +168,8 @@ async function linkTabs({ mode = 'new', geminiTabId = null } = {}) {
     gwb_work_tab_id: workTab.id,
     gwb_gemini_tab_id: geminiTab.id,
     gwb_work_tab_title: workTab.title || 'pestaña de trabajo',
+    gwb_gemini_tab_title: geminiTab.title || 'Gemini',
+    gwb_last_error: null,
     gwb_last_captured_url: null,
     gwb_auto_enabled: true
   });
@@ -248,19 +250,27 @@ async function unlinkTabs() {
 }
 
 async function getLinkStatus() {
-  const s = await chrome.storage.session.get(['gwb_work_tab_id', 'gwb_gemini_tab_id', 'gwb_work_tab_title']);
+  const s = await chrome.storage.session.get([
+    'gwb_work_tab_id', 'gwb_gemini_tab_id', 'gwb_work_tab_title', 'gwb_last_error'
+  ]);
   if (!s.gwb_work_tab_id || !s.gwb_gemini_tab_id) return { linked: false };
 
-  // Comprobar que las dos pestañas siguen existiendo
+  // Leer los títulos en vivo: si el usuario navega, el guardado se queda viejo
+  let workTab, geminiTab;
   try {
-    await chrome.tabs.get(s.gwb_work_tab_id);
-    await chrome.tabs.get(s.gwb_gemini_tab_id);
+    workTab = await chrome.tabs.get(s.gwb_work_tab_id);
+    geminiTab = await chrome.tabs.get(s.gwb_gemini_tab_id);
   } catch (e) {
     await unlinkTabs();
     return { linked: false };
   }
 
-  return { linked: true, workTitle: s.gwb_work_tab_title || '' };
+  return {
+    linked: true,
+    workTitle: workTab.title || s.gwb_work_tab_title || 'pestaña de trabajo',
+    geminiTitle: geminiTab.title || 'Gemini',
+    lastError: s.gwb_last_error || null
+  };
 }
 
 /**
@@ -316,12 +326,13 @@ async function captureLinkedWorkTab() {
   if (!result || !result.dataUrl) {
     const detalle = (result && result.error) || 'motivo desconocido';
     console.error(`[Gemini Bridge] Captura fallida (modo ${mode}) en "${workTab.title}": ${detalle}`);
+    await chrome.storage.session.set({ gwb_last_error: `modo ${mode}: ${detalle}` });
     return { error: `modo ${mode} — ${detalle}` };
   }
 
   const dataUrl = result.dataUrl;
 
-  await chrome.storage.session.set({ gwb_last_captured_url: workTab.url });
+  await chrome.storage.session.set({ gwb_last_captured_url: workTab.url, gwb_last_error: null });
   return { dataUrl, mode };
 }
 
@@ -715,26 +726,55 @@ function cleanupPageAfterScrollCapture() {
 /**
  * Ensambla los recortes en un OffscreenCanvas y devuelve el DataURL
  */
+// Tope de altura del montaje. Sin él, una página larga en una pantalla Retina
+// produce un lienzo de decenas de miles de píxeles: el PNG resultante pesa
+// decenas de megas en base64, revienta el paso de mensajes y Gemini lo
+// rechazaría igualmente. Para leer una pantalla no hace falta esa resolución.
+const MAX_STITCH_HEIGHT = 10000;
+
 async function stitchSlices(slices, totalHeight, viewportWidth, viewportHeight, dpr) {
-  const canvasWidth = Math.round(viewportWidth * dpr);
-  const canvasHeight = Math.round(totalHeight * dpr);
+  // Montar en píxeles CSS, no en píxeles físicos: en Retina eso ya divide por
+  // cuatro el número de píxeles sin perder nada legible.
+  let scale = 1 / dpr;
+  if (totalHeight > MAX_STITCH_HEIGHT) {
+    scale = Math.min(scale, MAX_STITCH_HEIGHT / totalHeight);
+    console.warn(`[Gemini Bridge] Página de ${Math.round(totalHeight)}px: reduciendo el montaje para no pasar de ${MAX_STITCH_HEIGHT}px.`);
+  }
+
+  const canvasWidth = Math.max(1, Math.round(viewportWidth * dpr * scale));
+  const canvasHeight = Math.max(1, Math.round(totalHeight * dpr * scale));
 
   const canvas = new OffscreenCanvas(canvasWidth, canvasHeight);
   const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error(`no se pudo crear el lienzo de ${canvasWidth}x${canvasHeight}`);
+
+  // Fondo blanco: el JPEG no tiene transparencia y los huecos saldrían negros.
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
   for (const slice of slices) {
     const response = await fetch(slice.dataUrl);
     const blob = await response.blob();
     const bitmap = await createImageBitmap(blob);
 
-    const destY = Math.round(slice.y * dpr);
-    ctx.drawImage(bitmap, 0, destY);
+    const destY = Math.round(slice.y * dpr * scale);
+    ctx.drawImage(
+      bitmap,
+      0, destY,
+      Math.round(bitmap.width * scale),
+      Math.round(bitmap.height * scale)
+    );
+    bitmap.close();
   }
 
-  const blob = await canvas.convertToBlob({ type: 'image/png' });
+  // JPEG en vez de PNG: para una captura de pantalla pesa varias veces menos y
+  // la diferencia visual es irrelevante para leer texto y localizar botones.
+  const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.82 });
   const arrayBuffer = await blob.arrayBuffer();
 
-  return bufferToDataUrl(arrayBuffer, 'image/png');
+  console.log(`[Gemini Bridge] Montaje ${canvasWidth}x${canvasHeight}px, ${(arrayBuffer.byteLength / 1048576).toFixed(1)} MB.`);
+
+  return bufferToDataUrl(arrayBuffer, 'image/jpeg');
 }
 
 /**
