@@ -252,23 +252,35 @@ async function captureLinkedWorkTab() {
   const [tabToRestore] = await chrome.tabs.query({ active: true, windowId: workTab.windowId });
   const mustSwitch = !workTab.active;
 
-  let dataUrl = null;
+  let result = { dataUrl: null, error: null };
   try {
     if (mustSwitch) {
-      await chrome.tabs.update(workTab.id, { active: true });
+      try {
+        await chrome.tabs.update(workTab.id, { active: true });
+      } catch (err) {
+        return { error: `no se pudo activar la pestaña de trabajo: ${err.message}` };
+      }
       await new Promise((r) => setTimeout(r, 250)); // margen para el repintado
     }
 
-    dataUrl = mode === 'scroll'
+    result = mode === 'scroll'
       ? await captureScrollOfTab(workTab)
       : await captureVisibleOfTab(workTab);
+  } catch (err) {
+    result = { dataUrl: null, error: `excepción en la captura: ${err.message}` };
   } finally {
     if (mustSwitch && tabToRestore && tabToRestore.id) {
       await chrome.tabs.update(tabToRestore.id, { active: true }).catch(() => {});
     }
   }
 
-  if (!dataUrl) return { error: 'No se pudo capturar la pestaña.' };
+  if (!result || !result.dataUrl) {
+    const detalle = (result && result.error) || 'motivo desconocido';
+    console.error(`[Gemini Bridge] Captura fallida (modo ${mode}) en "${workTab.title}": ${detalle}`);
+    return { error: `modo ${mode} — ${detalle}` };
+  }
+
+  const dataUrl = result.dataUrl;
 
   await chrome.storage.session.set({ gwb_last_captured_url: workTab.url });
   return { dataUrl, mode };
@@ -280,10 +292,12 @@ async function captureLinkedWorkTab() {
 async function captureVisibleOfTab(tab) {
   try {
     await paintBadgesInTab(tab.id);
-    return await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+    if (!dataUrl) return { dataUrl: null, error: 'captureVisibleTab no devolvió imagen' };
+    return { dataUrl, error: null };
   } catch (err) {
     console.error('[Gemini Bridge] Error en captura visible de la pestaña vinculada:', err);
-    return null;
+    return { dataUrl: null, error: `captureVisibleTab: ${err.message}` };
   }
 }
 
@@ -359,8 +373,12 @@ async function handleFullCapture() {
 async function handleScrollCapture() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab || !tab.id) return;
-  const dataUrl = await captureScrollOfTab(tab);
-  if (dataUrl) await sendToGemini(dataUrl, tab);
+  const { dataUrl, error } = await captureScrollOfTab(tab);
+  if (dataUrl) {
+    await sendToGemini(dataUrl, tab);
+  } else {
+    console.error('[Gemini Bridge] Captura de página completa fallida:', error);
+  }
 }
 
 /**
@@ -373,13 +391,13 @@ async function handleScrollCapture() {
 async function captureScrollOfTab(tab) {
   let activeTab = null;
   try {
-    if (!tab || !tab.id) return null;
+    if (!tab || !tab.id) return { dataUrl: null, error: 'pestaña inválida' };
     activeTab = tab;
 
     // Verificar si la URL es accesible para inyección de scripts
     if (tab.url && (tab.url.startsWith('chrome://') || tab.url.startsWith('edge://') || tab.url.startsWith('chrome-extension://') || tab.url.startsWith('about:'))) {
       console.warn('No se pueden inyectar scripts en páginas internas del navegador.');
-      return null;
+      return { dataUrl: null, error: 'es una página interna del navegador' };
     }
 
     // 0. Numerar una sola vez, antes de empezar a hacer scroll. Las insignias se
@@ -395,7 +413,7 @@ async function captureScrollOfTab(tab) {
 
     if (!initResults || !initResults[0] || !initResults[0].result) {
       console.error('No se pudo inicializar la captura de scroll.');
-      return null;
+      return { dataUrl: null, error: 'no se pudo medir la página para el scroll' };
     }
 
     const {
@@ -456,10 +474,12 @@ async function captureScrollOfTab(tab) {
       func: cleanupPageAfterScrollCapture
     });
 
-    if (slices.length === 0) return null;
+    if (slices.length === 0) return { dataUrl: null, error: 'no se capturó ninguna sección' };
 
     // 4. Ensamblar las capturas usando OffscreenCanvas
-    return await stitchSlices(slices, totalHeight, viewportWidth, viewportHeight, dpr);
+    const stitched = await stitchSlices(slices, totalHeight, viewportWidth, viewportHeight, dpr);
+    if (!stitched) return { dataUrl: null, error: 'falló el ensamblado de las secciones' };
+    return { dataUrl: stitched, error: null };
   } catch (err) {
     console.error('Error en captura con scroll:', err);
     if (activeTab && activeTab.id) {
@@ -468,7 +488,7 @@ async function captureScrollOfTab(tab) {
         func: cleanupPageAfterScrollCapture
       }).catch(() => {});
     }
-    return null;
+    return { dataUrl: null, error: `scroll: ${err.message}` };
   }
 }
 
