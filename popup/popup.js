@@ -3,6 +3,60 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnScroll = document.getElementById('btn-scroll');
   const btnCrop = document.getElementById('btn-crop');
   const btnClear = document.getElementById('btn-clear');
+  const btnLink = document.getElementById('btn-link');
+  const linkDot = document.getElementById('link-dot');
+  const linkText = document.getElementById('link-text');
+
+  let isLinked = false;
+
+  function renderLinkState(status) {
+    isLinked = Boolean(status && status.linked);
+    if (isLinked) {
+      linkDot.classList.add('on');
+      linkText.textContent = status.workTitle || 'Pestaña vinculada';
+      linkText.title = status.workTitle || '';
+      btnLink.textContent = 'Desvincular';
+      btnLink.classList.add('unlink');
+    } else {
+      linkDot.classList.remove('on');
+      linkText.textContent = 'Sin vincular';
+      linkText.title = '';
+      btnLink.textContent = 'Vincular con Gemini';
+      btnLink.classList.remove('unlink');
+    }
+  }
+
+  (async () => {
+    try {
+      renderLinkState(await chrome.runtime.sendMessage({ action: 'get_link_status' }));
+    } catch (err) {
+      renderLinkState({ linked: false });
+    }
+  })();
+
+  btnLink.addEventListener('click', async () => {
+    try {
+      if (isLinked) {
+        await chrome.runtime.sendMessage({ action: 'unlink_tabs' });
+        renderLinkState({ linked: false });
+        return;
+      }
+
+      btnLink.textContent = 'Vinculando…';
+      const res = await chrome.runtime.sendMessage({ action: 'link_tabs' });
+
+      if (res && res.ok) {
+        renderLinkState({ linked: true, workTitle: res.workTitle });
+        window.close();
+      } else {
+        linkText.textContent = (res && res.error) || 'No se pudo vincular';
+        btnLink.textContent = 'Reintentar';
+      }
+    } catch (err) {
+      console.error('Error vinculando pestañas:', err);
+      btnLink.textContent = 'Reintentar';
+    }
+  });
 
   btnFull.addEventListener('click', async () => {
     try {

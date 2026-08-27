@@ -135,6 +135,72 @@ body {
   box-shadow: 0 4px 16px rgba(46, 213, 115, 0.2);
 }
 
+.link-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+}
+
+.link-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #cbd5e1;
+  min-width: 0;
+}
+
+#link-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 150px;
+}
+
+.link-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #64748b;
+  flex-shrink: 0;
+}
+
+.link-dot.on {
+  background: #2ed573;
+  box-shadow: 0 0 8px rgba(46, 213, 115, 0.7);
+}
+
+.link-action {
+  all: unset;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 5px 10px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #4E8CFF;
+  background: rgba(78, 140, 255, 0.12);
+}
+
+.link-action:hover {
+  background: rgba(78, 140, 255, 0.22);
+  color: #ffffff;
+}
+
+.link-action.unlink {
+  color: #FF6492;
+  background: rgba(255, 100, 146, 0.12);
+}
+
+.link-action.unlink:hover {
+  background: rgba(255, 100, 146, 0.22);
+}
+
 .btn-ghost {
   background: transparent;
   border: 1px dashed rgba(255, 255, 255, 0.12);

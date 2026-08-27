@@ -32,8 +32,225 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === 'clear_badges') {
     clearBadgesInActiveTab();
     sendResponse({ status: 'ok' });
+  } else if (message.action === 'link_tabs') {
+    linkTabs()
+      .then((res) => sendResponse(res))
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
+  } else if (message.action === 'unlink_tabs') {
+    unlinkTabs()
+      .then(() => sendResponse({ ok: true }))
+      .catch(() => sendResponse({ ok: false }));
+    return true;
+  } else if (message.action === 'get_link_status') {
+    getLinkStatus()
+      .then((res) => sendResponse(res))
+      .catch(() => sendResponse({ linked: false }));
+    return true;
+  } else if (message.action === 'request_capture') {
+    captureLinkedWorkTab()
+      .then((res) => sendResponse(res))
+      .catch((err) => sendResponse({ error: err.message }));
+    return true;
   }
 });
+
+// ===========================================================================
+// VÍNCULO ENTRE LA PESTAÑA DE TRABAJO Y LA DE GEMINI
+// ===========================================================================
+
+const GEMINI_URL = 'https://gemini.google.com/app';
+
+/**
+ * Vincula la pestaña activa (trabajo) con una pestaña de Gemini, abriéndola a
+ * su derecha si no existe ya. Sustituye a la heurística anterior de "la
+ * pestaña de al lado", que dependía del orden en que estuvieran colocadas.
+ */
+async function linkTabs() {
+  const [workTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!workTab || !workTab.id) return { ok: false, error: 'No hay pestaña activa.' };
+
+  if (workTab.url && /^(chrome|edge|brave|about):/.test(workTab.url)) {
+    return { ok: false, error: 'No se puede vincular una página interna del navegador.' };
+  }
+
+  if (workTab.url && workTab.url.includes('gemini.google.com')) {
+    return { ok: false, error: 'Vincula la pestaña de trabajo, no la de Gemini.' };
+  }
+
+  // Reutilizar una pestaña de Gemini de la misma ventana si ya está abierta
+  const existing = await chrome.tabs.query({
+    url: '*://gemini.google.com/*',
+    windowId: workTab.windowId
+  });
+
+  let geminiTab = existing[0];
+  if (!geminiTab) {
+    geminiTab = await chrome.tabs.create({
+      url: GEMINI_URL,
+      index: workTab.index + 1,
+      windowId: workTab.windowId,
+      active: false
+    });
+    // Esperar a que cargue antes de inyectar el puente
+    await waitForTabComplete(geminiTab.id, 15000);
+  }
+
+  await chrome.storage.session.set({
+    gwb_work_tab_id: workTab.id,
+    gwb_gemini_tab_id: geminiTab.id,
+    gwb_work_tab_title: workTab.title || 'pestaña de trabajo',
+    gwb_last_captured_url: null,
+    gwb_auto_enabled: true
+  });
+
+  await injectBridge(geminiTab.id, workTab.title || '');
+
+  return {
+    ok: true,
+    workTitle: workTab.title || '',
+    geminiTabId: geminiTab.id
+  };
+}
+
+async function waitForTabComplete(tabId, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const t = await chrome.tabs.get(tabId);
+      if (t.status === 'complete') return true;
+    } catch (e) {
+      return false;
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  return false;
+}
+
+async function injectBridge(geminiTabId, workTabTitle) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: geminiTabId },
+      files: ['content/gemini_bridge.js']
+    });
+    await chrome.tabs.sendMessage(geminiTabId, {
+      action: 'bridge_status',
+      workTabTitle
+    }).catch(() => {});
+  } catch (err) {
+    console.warn('[Gemini Bridge] No se pudo inyectar el puente:', err.message);
+  }
+}
+
+// Si la pestaña de Gemini se recarga, el puente inyectado desaparece con ella.
+// Hay que volver a ponerlo o el envío automático deja de funcionar en silencio.
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+  if (changeInfo.status !== 'complete') return;
+  const s = await chrome.storage.session.get(['gwb_gemini_tab_id', 'gwb_work_tab_title']);
+  if (s.gwb_gemini_tab_id === tabId) {
+    await injectBridge(tabId, s.gwb_work_tab_title || '');
+  }
+});
+
+// Si se cierra cualquiera de las dos pestañas, el vínculo deja de tener sentido.
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const s = await chrome.storage.session.get(['gwb_work_tab_id', 'gwb_gemini_tab_id']);
+  if (s.gwb_work_tab_id === tabId || s.gwb_gemini_tab_id === tabId) {
+    await unlinkTabs();
+  }
+});
+
+async function unlinkTabs() {
+  const { gwb_gemini_tab_id } = await chrome.storage.session.get(['gwb_gemini_tab_id']);
+  if (gwb_gemini_tab_id) {
+    chrome.tabs.sendMessage(gwb_gemini_tab_id, { action: 'bridge_unlink' }).catch(() => {});
+  }
+  await chrome.storage.session.remove([
+    'gwb_work_tab_id',
+    'gwb_gemini_tab_id',
+    'gwb_work_tab_title',
+    'gwb_last_captured_url'
+  ]);
+}
+
+async function getLinkStatus() {
+  const s = await chrome.storage.session.get(['gwb_work_tab_id', 'gwb_gemini_tab_id', 'gwb_work_tab_title']);
+  if (!s.gwb_work_tab_id || !s.gwb_gemini_tab_id) return { linked: false };
+
+  // Comprobar que las dos pestañas siguen existiendo
+  try {
+    await chrome.tabs.get(s.gwb_work_tab_id);
+    await chrome.tabs.get(s.gwb_gemini_tab_id);
+  } catch (e) {
+    await unlinkTabs();
+    return { linked: false };
+  }
+
+  return { linked: true, workTitle: s.gwb_work_tab_title || '' };
+}
+
+/**
+ * Captura la pestaña de trabajo vinculada aplicando la política acordada:
+ * la primera consulta sobre una URL manda la página completa con scroll, y las
+ * siguientes solo lo visible, que es instantáneo. Si cambia la URL, vuelve a
+ * mandarse la completa.
+ * @returns {Promise<{dataUrl: string|null, mode: string, error?: string}>}
+ */
+async function captureLinkedWorkTab() {
+  const s = await chrome.storage.session.get(['gwb_work_tab_id', 'gwb_last_captured_url']);
+  if (!s.gwb_work_tab_id) return { error: 'No hay ninguna pestaña vinculada.' };
+
+  let workTab;
+  try {
+    workTab = await chrome.tabs.get(s.gwb_work_tab_id);
+  } catch (e) {
+    await unlinkTabs();
+    return { error: 'La pestaña vinculada ya no existe.' };
+  }
+
+  const urlChanged = workTab.url !== s.gwb_last_captured_url;
+  const mode = urlChanged ? 'scroll' : 'visible';
+
+  // captureVisibleTab sólo puede fotografiar la pestaña ACTIVA de la ventana.
+  // Como el usuario está escribiendo en Gemini, hay que traer al frente la
+  // pestaña de trabajo, capturarla y devolver el foco. De ahí el parpadeo.
+  const [tabToRestore] = await chrome.tabs.query({ active: true, windowId: workTab.windowId });
+  const mustSwitch = !workTab.active;
+
+  let dataUrl = null;
+  try {
+    if (mustSwitch) {
+      await chrome.tabs.update(workTab.id, { active: true });
+      await new Promise((r) => setTimeout(r, 250)); // margen para el repintado
+    }
+
+    dataUrl = mode === 'scroll'
+      ? await captureScrollOfTab(workTab)
+      : await captureVisibleOfTab(workTab);
+  } finally {
+    if (mustSwitch && tabToRestore && tabToRestore.id) {
+      await chrome.tabs.update(tabToRestore.id, { active: true }).catch(() => {});
+    }
+  }
+
+  if (!dataUrl) return { error: 'No se pudo capturar la pestaña.' };
+
+  await chrome.storage.session.set({ gwb_last_captured_url: workTab.url });
+  return { dataUrl, mode };
+}
+
+/**
+ * Captura sólo el área visible de una pestaña concreta, numerándola antes.
+ */
+async function captureVisibleOfTab(tab) {
+  try {
+    await paintBadgesInTab(tab.id);
+    return await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+  } catch (err) {
+    console.error('[Gemini Bridge] Error en captura visible de la pestaña vinculada:', err);
+    return null;
+  }
+}
 
 /**
  * Numera los elementos interactivos de la pestaña antes de capturar.
@@ -105,16 +322,29 @@ async function handleFullCapture() {
  * Flujo de captura de página completa con scroll y ensamblado
  */
 async function handleScrollCapture() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab || !tab.id) return;
+  const dataUrl = await captureScrollOfTab(tab);
+  if (dataUrl) await sendToGemini(dataUrl, tab);
+}
+
+/**
+ * Captura de página completa con scroll y ensamblado sobre una pestaña dada.
+ * Devuelve la imagen en vez de enviarla, para poder reutilizarla desde el
+ * puente automático además de desde el popup.
+ * @param {chrome.tabs.Tab} tab
+ * @returns {Promise<string|null>}
+ */
+async function captureScrollOfTab(tab) {
   let activeTab = null;
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab || !tab.id) return;
+    if (!tab || !tab.id) return null;
     activeTab = tab;
 
     // Verificar si la URL es accesible para inyección de scripts
     if (tab.url && (tab.url.startsWith('chrome://') || tab.url.startsWith('edge://') || tab.url.startsWith('chrome-extension://') || tab.url.startsWith('about:'))) {
       console.warn('No se pueden inyectar scripts en páginas internas del navegador.');
-      return;
+      return null;
     }
 
     // 0. Numerar una sola vez, antes de empezar a hacer scroll. Las insignias se
@@ -130,7 +360,7 @@ async function handleScrollCapture() {
 
     if (!initResults || !initResults[0] || !initResults[0].result) {
       console.error('No se pudo inicializar la captura de scroll.');
-      return;
+      return null;
     }
 
     const {
@@ -191,14 +421,10 @@ async function handleScrollCapture() {
       func: cleanupPageAfterScrollCapture
     });
 
-    if (slices.length === 0) return;
+    if (slices.length === 0) return null;
 
     // 4. Ensamblar las capturas usando OffscreenCanvas
-    const stitchedDataUrl = await stitchSlices(slices, totalHeight, viewportWidth, viewportHeight, dpr);
-
-    if (stitchedDataUrl) {
-      await sendToGemini(stitchedDataUrl, tab);
-    }
+    return await stitchSlices(slices, totalHeight, viewportWidth, viewportHeight, dpr);
   } catch (err) {
     console.error('Error en captura con scroll:', err);
     if (activeTab && activeTab.id) {
@@ -207,6 +433,7 @@ async function handleScrollCapture() {
         func: cleanupPageAfterScrollCapture
       }).catch(() => {});
     }
+    return null;
   }
 }
 
