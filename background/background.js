@@ -32,6 +32,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === 'clear_badges') {
     clearBadgesInActiveTab();
     sendResponse({ status: 'ok' });
+  } else if (message.action === 'repaint_badges') {
+    repaintBadgesInActiveTab()
+      .then((count) => sendResponse({ count }))
+      .catch(() => sendResponse({ count: 0 }));
+    return true;
   } else if (message.action === 'link_tabs') {
     linkTabs({ mode: message.mode, geminiTabId: message.geminiTabId })
       .then((res) => sendResponse(res))
@@ -382,6 +387,19 @@ async function paintBadgesInTab(tabId) {
     console.warn('[Gemini Bridge] No se pudieron pintar las insignias:', err.message);
     return 0;
   }
+}
+
+/**
+ * Vuelve a numerar la pestaña activa. Las insignias se colocan en coordenadas
+ * fijas del documento, así que al desplegar un menú o mover algo se quedan
+ * donde estaban. Se repintan solas en cada captura, pero entre consulta y
+ * consulta hace falta poder realinearlas a mano.
+ * @returns {Promise<number>} insignias pintadas
+ */
+async function repaintBadgesInActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab || !tab.id) return 0;
+  return await paintBadgesInTab(tab.id);
 }
 
 /**

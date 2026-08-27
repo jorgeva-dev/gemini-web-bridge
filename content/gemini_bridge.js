@@ -204,7 +204,9 @@
   function triggerSend() {
     const btn = findSendButton();
     if (btn) {
+      passThrough = true;
       btn.click();
+      passThrough = false;
       return true;
     }
     // Reserva: Enter sintético, dejándolo pasar por nuestro propio interceptor
@@ -305,32 +307,61 @@
     }
   }, true);
 
-  document.addEventListener('keydown', (e) => {
-    if (!isCurrent()) return; // relevado por un puente más nuevo
-    if (passThrough || busy || !autoEnabled) return;
-    if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+  /**
+   * ¿Debe este puente interceptar el envío que se está produciendo?
+   * Centralizado porque hay dos formas de enviar —Enter y clic en la flecha— y
+   * tener la decisión duplicada es cómo se coló el agujero del ratón.
+   * @returns {boolean}
+   */
+  function shouldIntercept() {
+    if (!isCurrent()) return false; // relevado por un puente más nuevo
+    if (passThrough || busy || !autoEnabled) return false;
 
     // Si la extensión se ha recargado, este script ya no puede capturar nada.
-    // Dejamos pasar el Enter en vez de bloquear el envío, y decimos qué hacer.
+    // Dejamos salir el mensaje en vez de bloquearlo, y decimos qué hacer.
     if (!contextAlive()) {
       renderBar('♻️ Extensión recargada — pulsa F5 en esta pestaña');
-      return;
+      return false;
     }
 
-    // Tras un fallo de captura, el siguiente Enter envía sin interceptar: es la
+    // Tras un fallo de captura, el siguiente envío va sin interceptar: es la
     // salida del usuario para mandar el mensaje igualmente si así lo decide.
     if (skipNext) {
       skipNext = false;
       renderBar();
-      return;
+      return false;
     }
+
+    const composer = findComposer();
+    if (!composer) return false;
+    if (!(composer.innerText || '').trim()) return false;
+
+    return true;
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
 
     const composer = findComposer();
     if (!composer) return;
     if (!composer.contains(e.target) && e.target !== composer) return;
 
-    const text = (composer.innerText || '').trim();
-    if (!text) return;
+    if (!shouldIntercept()) return;
+
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    handleIntercept();
+  }, true);
+
+  // Enviar con el ratón es tan válido como con el teclado. Sin esto, pulsar la
+  // flecha azul mandaba el mensaje sin captura y sin decir nada: de ahí la
+  // sensación de que a veces adjuntaba y a veces no.
+  document.addEventListener('click', (e) => {
+    const btn = findSendButton();
+    if (!btn) return;
+    if (e.target !== btn && !btn.contains(e.target)) return;
+
+    if (!shouldIntercept()) return;
 
     e.preventDefault();
     e.stopImmediatePropagation();
