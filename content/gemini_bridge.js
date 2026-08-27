@@ -7,20 +7,27 @@
  * extensión captura sola la pestaña de trabajo vinculada, adjunta la imagen y
  * deja que el mensaje salga.
  *
- * Red de seguridad: si la captura falla o tarda más de TIMEOUT_MS, el mensaje
- * se envía igualmente sin imagen. Interceptar el envío nunca debe impedir que
- * el usuario pueda escribir a Gemini.
+ * Si la captura falla, el mensaje NO se envía: enviarlo sin imagen dejaba a
+ * Gemini contestando a ciegas sobre una pantalla que nunca vio, y el usuario no
+ * se enteraba. En su lugar se avisa en la píldora y el siguiente Enter envía sin
+ * interceptar. Interceptar el envío nunca debe impedir que el usuario pueda
+ * escribir a Gemini: de ahí esa salida, el interruptor AUTO OFF y el Escape.
  */
 (function () {
   if (window.__gwbBridgeLoaded) return;
   window.__gwbBridgeLoaded = true;
 
-  const TIMEOUT_MS = 5000;
+  // La captura de página completa recorre la página en trozos y Chrome limita
+  // captureVisibleTab a unas dos llamadas por segundo, así que una página larga
+  // se va a 10-20 segundos con facilidad. Este tope es una red para cuelgues
+  // reales, no un plazo normal de trabajo.
+  const TIMEOUT_MS = 90000;
   const BAR_ID = 'gwb-bridge-bar';
 
   let autoEnabled = true;
   let busy = false;
   let passThrough = false;
+  let skipNext = false;
   let workTabTitle = '';
 
   // ---------------------------------------------------------------- utilidades
@@ -134,11 +141,6 @@
     toggle.style.color = autoEnabled ? '#2ed573' : '#9ca3af';
   }
 
-  function flash(text, ms = 2500) {
-    renderBar(text);
-    setTimeout(() => renderBar(), ms);
-  }
-
   // --------------------------------------------------------------- adjuntar
 
   /**
@@ -208,7 +210,15 @@
     busy = true;
     renderBar('📸 Capturando la pestaña…');
 
+    // La primera captura sobre una URL recorre la página entera y tarda. Sin
+    // este aviso parece que la extensión se ha colgado.
+    const slowNotice = setTimeout(() => {
+      if (busy) renderBar('📜 Recorriendo la página completa…');
+    }, 2500);
+
     let dataUrl = null;
+    let failReason = null;
+
     try {
       const response = await Promise.race([
         chrome.runtime.sendMessage({ action: 'request_capture' }),
@@ -216,31 +226,70 @@
       ]);
 
       if (response && response.timeout) {
-        console.warn('[Gemini Bridge] Captura agotó el tiempo. Enviando sin imagen.');
+        failReason = 'la captura tardó demasiado';
       } else if (response && response.dataUrl) {
         dataUrl = response.dataUrl;
       } else if (response && response.error) {
-        console.warn('[Gemini Bridge] Captura fallida:', response.error);
+        failReason = response.error;
+      } else {
+        failReason = 'respuesta vacía del servicio de captura';
       }
     } catch (err) {
-      console.warn('[Gemini Bridge] Error pidiendo la captura:', err.message);
+      failReason = err.message;
     }
 
-    if (dataUrl) {
-      const ok = await attachImage(dataUrl);
-      renderBar(ok ? '✅ Captura adjuntada' : '⚠️ Enviando sin imagen');
-    } else {
-      renderBar('⚠️ Enviando sin imagen');
+    clearTimeout(slowNotice);
+
+    // Si no hay imagen NO enviamos. Mandar el mensaje igualmente dejaba a Gemini
+    // contestando a ciegas sobre una pantalla que nunca vio, y el usuario no se
+    // enteraba de que había fallado nada.
+    if (!dataUrl) {
+      console.warn('[Gemini Bridge] Captura fallida:', failReason);
+      renderBar(`⚠️ Sin captura (${failReason}). Enter otra vez para enviar igual`);
+      skipNext = true;
+      busy = false;
+      return;
     }
 
+    renderBar('📎 Adjuntando…');
+    const attached = await attachImage(dataUrl);
+
+    if (!attached) {
+      // El pegado puede haber funcionado aunque no hayamos sabido detectarlo;
+      // damos un margen extra antes de enviar.
+      console.warn('[Gemini Bridge] No se detectó el adjunto. Enviando tras margen extra.');
+      renderBar('⏳ Esperando a que suba…');
+      await sleep(1500);
+    }
+
+    renderBar('✅ Captura adjuntada');
     triggerSend();
     busy = false;
     setTimeout(() => renderBar(), 2000);
   }
 
+  // Escape aborta una captura en curso: sin esto, una captura lenta o colgada
+  // bloquea el envío hasta agotar TIMEOUT_MS sin que el usuario pueda hacer nada.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && busy) {
+      busy = false;
+      skipNext = true;
+      renderBar('✋ Captura cancelada. Enter para enviar sin imagen');
+      setTimeout(() => renderBar(), 3000);
+    }
+  }, true);
+
   document.addEventListener('keydown', (e) => {
     if (passThrough || busy || !autoEnabled) return;
     if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+
+    // Tras un fallo de captura, el siguiente Enter envía sin interceptar: es la
+    // salida del usuario para mandar el mensaje igualmente si así lo decide.
+    if (skipNext) {
+      skipNext = false;
+      renderBar();
+      return;
+    }
 
     const composer = findComposer();
     if (!composer) return;
