@@ -178,8 +178,25 @@
       renderBar();
     });
 
+    const copyBtn = document.createElement('button');
+    copyBtn.id = 'gwb-bridge-copy';
+    copyBtn.type = 'button';
+    copyBtn.textContent = '⧉ COPIAR';
+    copyBtn.title = 'Copia toda la conversación al portapapeles, en texto con los turnos marcados.';
+    copyBtn.style.cssText = [
+      'all:unset',
+      'cursor:pointer',
+      'padding:3px 9px',
+      'border-radius:6px',
+      'background:rgba(255,255,255,.08)',
+      'color:#cbd5e1',
+      'font:600 11px/1.4 ui-sans-serif,system-ui,sans-serif'
+    ].join(';');
+    copyBtn.addEventListener('click', copyTranscript);
+
     bar.appendChild(label);
     bar.appendChild(modeBtn);
+    bar.appendChild(copyBtn);
     bar.appendChild(toggle);
     document.body.appendChild(bar);
     return bar;
@@ -218,6 +235,77 @@
 
     // Con las capturas en pausa, el selector de alcance no pinta nada
     if (modeBtn) modeBtn.style.opacity = autoEnabled ? '1' : '.4';
+  }
+
+  // ------------------------------------------------------------ transcripción
+
+  // Gemini marca cada turno con elementos propios. Como todo lo que depende de
+  // su DOM, esto puede romperse si Google lo cambia; por eso hay varias vías y
+  // una última de reserva por texto plano.
+  const TURN_SELECTORS = 'user-query, model-response';
+
+  /**
+   * Extrae la conversación visible como texto plano con los turnos marcados.
+   * @returns {string}
+   */
+  function extractTranscript() {
+    const turns = Array.from(document.querySelectorAll(TURN_SELECTORS));
+
+    if (turns.length > 0) {
+      const partes = turns.map((el) => {
+        const esUsuario = el.tagName.toLowerCase() === 'user-query';
+        const texto = (el.innerText || '').trim();
+        if (!texto) return null;
+        return `${esUsuario ? '## Yo' : '## Gemini'}\n\n${texto}`;
+      }).filter(Boolean);
+
+      if (partes.length > 0) return partes.join('\n\n---\n\n');
+    }
+
+    // Reserva: si los elementos con nombre han cambiado, al menos devolver el
+    // texto del contenedor de la conversación en vez de no dar nada.
+    const contenedor = document.querySelector('main, [role="main"], .conversation-container');
+    return contenedor ? (contenedor.innerText || '').trim() : '';
+  }
+
+  async function copyTranscript() {
+    const texto = extractTranscript();
+
+    if (!texto) {
+      renderBar('⚠️ No se encontró la conversación');
+      setTimeout(() => renderBar(), 3000);
+      return;
+    }
+
+    const cabecera = workTabTitle
+      ? `# Conversación con Gemini sobre "${workTabTitle}"\n\n`
+      : '# Conversación con Gemini\n\n';
+    const salida = cabecera + texto;
+
+    try {
+      await navigator.clipboard.writeText(salida);
+    } catch (err) {
+      // Sin permiso de portapapeles: vía antigua con un textarea temporal
+      const ta = document.createElement('textarea');
+      ta.value = salida;
+      ta.style.cssText = 'position:fixed;top:-9999px;opacity:0';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand('copy');
+      } catch (e2) {
+        console.error('[Gemini Bridge] No se pudo copiar la transcripción:', e2);
+        renderBar('⚠️ No se pudo copiar');
+        setTimeout(() => renderBar(), 3000);
+        ta.remove();
+        return;
+      }
+      ta.remove();
+    }
+
+    const turnos = (salida.match(/^## /gm) || []).length;
+    renderBar(`✅ Copiado (${turnos} turnos, ${salida.length.toLocaleString('es')} caracteres)`);
+    setTimeout(() => renderBar(), 3500);
   }
 
   // --------------------------------------------------------------- adjuntar
