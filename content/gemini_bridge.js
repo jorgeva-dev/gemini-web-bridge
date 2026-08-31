@@ -191,6 +191,9 @@
     const toggle = bar.querySelector('#gwb-bridge-toggle');
 
     label.textContent = statusText || (workTabTitle ? `🔗 ${workTabTitle}` : '🔗 Pestaña vinculada');
+    label.title = workTabTitle
+      ? `Vinculado a "${workTabTitle}". Sus capturas se adjuntan a esta conversación.`
+      : 'Pestaña de trabajo vinculada a esta conversación.';
 
     const modeBtn = bar.querySelector('#gwb-bridge-mode');
     if (modeBtn) {
@@ -203,9 +206,18 @@
       modeBtn.style.color = esCompleta ? '#7dabff' : '#cbd5e1';
     }
 
-    toggle.textContent = autoEnabled ? 'AUTO ON' : 'AUTO OFF';
-    toggle.style.background = autoEnabled ? 'rgba(46,213,115,.18)' : 'rgba(255,255,255,.08)';
-    toggle.style.color = autoEnabled ? '#2ed573' : '#9ca3af';
+    // "AUTO ON/OFF" decía el estado pero no qué controlaba ni qué pasaba al
+    // pulsarlo, y no se entendía que aquí se pausan las capturas sin romper el
+    // vínculo. El nombre y el tooltip ahora lo dicen.
+    toggle.textContent = autoEnabled ? '📷 ENVIANDO' : '⏸ EN PAUSA';
+    toggle.title = autoEnabled
+      ? 'Cada mensaje adjunta una captura. Pulsa para PAUSAR y seguir conversando sin enviar imágenes, sin perder el vínculo.'
+      : 'Capturas en pausa: tus mensajes salen sin imagen. Pulsa para volver a adjuntarlas.';
+    toggle.style.background = autoEnabled ? 'rgba(46,213,115,.18)' : 'rgba(250,204,21,.18)';
+    toggle.style.color = autoEnabled ? '#2ed573' : '#facc15';
+
+    // Con las capturas en pausa, el selector de alcance no pinta nada
+    if (modeBtn) modeBtn.style.opacity = autoEnabled ? '1' : '.4';
   }
 
   // --------------------------------------------------------------- adjuntar
