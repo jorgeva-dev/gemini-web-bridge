@@ -185,6 +185,8 @@ async function linkTabs({ mode = 'new', geminiTabId = null } = {}) {
     gwb_primed: false
   });
 
+  await groupLinkedTabs(workTab.id, geminiTab.id);
+
   await injectBridge(geminiTab.id, workTab.title || '');
 
   // Llevar al usuario a Gemini: es donde va a escribir, y además hace visible
@@ -198,6 +200,47 @@ async function linkTabs({ mode = 'new', geminiTabId = null } = {}) {
     workTitle: workTab.title || '',
     geminiTabId: geminiTab.id
   };
+}
+
+/**
+ * Mete las dos pestañas vinculadas en un grupo del navegador, para que el
+ * vínculo se vea en la propia barra de pestañas y no sólo dentro del popup.
+ * De paso las deja juntas, que es la mitad del problema.
+ * Si algo falla, el vínculo sigue siendo válido: agrupar es cosmético.
+ * @param {number} workTabId
+ * @param {number} geminiTabId
+ */
+async function groupLinkedTabs(workTabId, geminiTabId) {
+  if (!chrome.tabGroups || !chrome.tabs.group) return;
+  try {
+    const groupId = await chrome.tabs.group({ tabIds: [workTabId, geminiTabId] });
+    await chrome.tabGroups.update(groupId, {
+      title: 'Gemini Bridge',
+      color: 'blue',
+      collapsed: false
+    });
+    await chrome.storage.session.set({ gwb_group_id: groupId });
+  } catch (err) {
+    console.warn('[Gemini Bridge] No se pudieron agrupar las pestañas:', err.message);
+  }
+}
+
+/**
+ * Saca las pestañas del grupo al desvincular. Si el usuario ya las movió o
+ * cerró, no hay nada que deshacer.
+ */
+async function ungroupLinkedTabs() {
+  const s = await chrome.storage.session.get(['gwb_work_tab_id', 'gwb_gemini_tab_id', 'gwb_group_id']);
+  if (!s.gwb_group_id || !chrome.tabs.ungroup) return;
+
+  const ids = [s.gwb_work_tab_id, s.gwb_gemini_tab_id].filter((id) => typeof id === 'number');
+  if (ids.length === 0) return;
+
+  try {
+    await chrome.tabs.ungroup(ids);
+  } catch (err) {
+    console.warn('[Gemini Bridge] No se pudieron desagrupar las pestañas:', err.message);
+  }
 }
 
 async function waitForTabComplete(tabId, timeoutMs) {
@@ -248,6 +291,8 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
 });
 
 async function unlinkTabs() {
+  await ungroupLinkedTabs();
+
   const { gwb_gemini_tab_id } = await chrome.storage.session.get(['gwb_gemini_tab_id']);
   if (gwb_gemini_tab_id) {
     chrome.tabs.sendMessage(gwb_gemini_tab_id, { action: 'bridge_unlink' }).catch(() => {});
@@ -260,7 +305,8 @@ async function unlinkTabs() {
     'gwb_work_tab_title',
     'gwb_gemini_tab_title',
     'gwb_last_error',
-    'gwb_primed'
+    'gwb_primed',
+    'gwb_group_id'
   ]);
 }
 
