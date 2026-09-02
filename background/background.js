@@ -293,6 +293,21 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
 async function unlinkTabs() {
   await ungroupLinkedTabs();
 
+  // Desvincular debe dejarlo todo como estaba: sin píldora en Gemini y sin
+  // insignias en la página de trabajo. Media limpieza es peor que ninguna,
+  // porque deja restos que el usuario no sabe cómo quitar.
+  const { gwb_work_tab_id } = await chrome.storage.session.get(['gwb_work_tab_id']);
+  if (gwb_work_tab_id) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: gwb_work_tab_id },
+        func: () => { if (typeof window.__gwbClearBadges === 'function') window.__gwbClearBadges(); }
+      });
+    } catch (err) {
+      console.warn('[Gemini Bridge] No se pudieron quitar las insignias al desvincular:', err.message);
+    }
+  }
+
   const { gwb_gemini_tab_id } = await chrome.storage.session.get(['gwb_gemini_tab_id']);
   if (gwb_gemini_tab_id) {
     chrome.tabs.sendMessage(gwb_gemini_tab_id, { action: 'bridge_unlink' }).catch(() => {});

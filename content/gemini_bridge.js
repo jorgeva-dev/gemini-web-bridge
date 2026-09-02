@@ -58,6 +58,12 @@
   let captureMode = 'visible'; // 'visible' | 'full'
   let primed = false;
 
+  // Al desvincular no basta con borrar la píldora: los interceptores de teclado
+  // y ratón siguen registrados, vuelven a disparar, la captura falla porque ya
+  // no hay vínculo y renderBar reconstruye la barra. El resultado es una Gemini
+  // con un panel zombi quejándose. Esta bandera retira el puente del todo.
+  let standDown = false;
+
   // En el flujo automático el usuario escribe su propia pregunta, así que Gemini
   // no recibía ninguna explicación de qué son las insignias ni cómo referirse a
   // ellas: de ahí que respondiera narrando el nombre del archivo. Se le explica
@@ -203,6 +209,7 @@
   }
 
   function renderBar(statusText) {
+    if (standDown || !isCurrent()) return;
     const bar = ensureBar();
     const label = bar.querySelector('#gwb-bridge-label');
     const toggle = bar.querySelector('#gwb-bridge-toggle');
@@ -481,6 +488,7 @@
    * @returns {boolean}
    */
   function shouldIntercept() {
+    if (standDown) return false; // desvinculado: Gemini vuelve a ser Gemini
     if (!isCurrent()) return false; // relevado por un puente más nuevo
     if (passThrough || busy || !autoEnabled) return false;
 
@@ -543,9 +551,15 @@
       renderBar();
     }
     if (message.action === 'bridge_unlink') {
+      standDown = true;
+      busy = false;
       const bar = document.getElementById(BAR_ID);
       if (bar) bar.remove();
       window.__gwbBridgeLoaded = false;
+      // Ceder la generación para que este script no vuelva a considerarse
+      // vigente ni aunque algo lo llame más tarde.
+      window.__gwbGeneration = (window.__gwbGeneration || 0) + 1;
+      console.log('[Gemini Bridge] Desvinculado: puente retirado de esta pestaña.');
     }
   });
 
