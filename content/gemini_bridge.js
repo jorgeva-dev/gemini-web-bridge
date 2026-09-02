@@ -102,6 +102,34 @@
     return null;
   }
 
+  /**
+   * Acota la búsqueda de adjuntos a la caja de escritura. Buscar en todo el
+   * documento contaba como adjunto cualquier imagen del historial de la
+   * conversación, lo que hacía creer que la subida había terminado antes de
+   * empezar.
+   * @returns {Element|null}
+   */
+  function findComposerScope() {
+    const composer = findComposer();
+    if (!composer) return null;
+    return composer.closest('form') ||
+           composer.closest('[class*="input-area"], [class*="composer"], [class*="bottom-container"]') ||
+           composer.parentElement?.parentElement?.parentElement ||
+           composer;
+  }
+
+  /**
+   * ¿Hay ya un adjunto puesto a la espera de enviarse?
+   * @returns {boolean}
+   */
+  function hasPendingAttachment() {
+    const scope = findComposerScope();
+    if (!scope) return false;
+    return Boolean(scope.querySelector(
+      'img[src^="blob:"], [data-test-id*="file"], [class*="attachment"], [class*="uploader"] img'
+    ));
+  }
+
   function dataURLtoFile(dataUrlString, filename = 'screenshot.png') {
     const parts = dataUrlString.split(',');
     const mimeMatch = parts[0].match(/:(.*?);/);
@@ -347,10 +375,7 @@
     const deadline = Date.now() + 4000;
     while (Date.now() < deadline) {
       await sleep(200);
-      const hasAttachment = document.querySelector(
-        'img[src^="blob:"], [data-test-id*="file"], [class*="attachment"], [class*="uploader"] img'
-      );
-      if (hasAttachment) {
+      if (hasPendingAttachment()) {
         await sleep(400); // margen para que la subida se consolide
         return true;
       }
@@ -510,6 +535,15 @@
     const composer = findComposer();
     if (!composer) return false;
     if (!(composer.innerText || '').trim()) return false;
+
+    // Si ya hay una imagen puesta —por ejemplo la que acabas de mandar a mano
+    // desde el widget— no se añade otra. Antes acababan dos capturas idénticas
+    // en la misma pregunta.
+    if (hasPendingAttachment()) {
+      renderBar('📎 Ya hay una captura adjunta — no añado otra');
+      setTimeout(() => renderBar(), 2500);
+      return false;
+    }
 
     return true;
   }
