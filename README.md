@@ -8,6 +8,9 @@ then click **12**"* — because both of you are looking at the same numbered pic
 
 No API key, no quota, no billing. It drives the Gemini web app you are already logged into.
 
+**[▶ Watch it work](https://youtu.be/Uf5v0hVau0k)** — linking two tabs, numbering a page, and
+asking Gemini where to click.
+
 ---
 
 ## Why this exists
