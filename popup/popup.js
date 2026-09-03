@@ -24,7 +24,8 @@ document.addEventListener('DOMContentLoaded', () => {
       // Mostrar los dos extremos del vínculo: enseñar sólo uno no dejaba claro
       // con qué conversación de Gemini se había emparejado la página.
       linkDot.classList.add('on');
-      linkText.textContent = `📄 ${status.workTitle || 'Pestaña de trabajo'}`;
+      const lado = status.side === 'gemini' ? '✦' : '📄';
+      linkText.textContent = `${lado} ${status.workTitle || 'Pestaña de trabajo'}`;
       linkText.title = status.workTitle || '';
       linkGemini.textContent = `✦ ${status.geminiTitle || 'Gemini'}`;
       linkGemini.title = status.geminiTitle || '';
@@ -33,8 +34,12 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       linkDot.classList.remove('on');
       linkText.textContent = 'Sin vincular';
-      linkText.title = '';
-      linkGemini.textContent = '';
+      linkText.title = 'Esta pestaña no está vinculada. Puedes crear un vínculo nuevo sin tocar los que ya tengas.';
+      // Con varias parejas abiertas conviene saber que las otras siguen vivas,
+      // o parece que vincular una haya deshecho las demás.
+      linkGemini.textContent = status && status.total
+        ? `${status.total} vínculo${status.total === 1 ? '' : 's'} activo${status.total === 1 ? '' : 's'} en otras pestañas`
+        : '';
       linkGemini.title = '';
       btnLink.textContent = 'Vincular con Gemini';
       btnLink.classList.remove('unlink');
@@ -105,11 +110,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const label = document.createElement('span');
       label.className = 'chooser-label';
-      label.textContent = t.title;
+      label.textContent = t.linked ? `${t.title} (ya vinculada)` : t.title;
 
       btn.appendChild(icon);
       btn.appendChild(label);
-      btn.addEventListener('click', () => doLink('existing', t.id));
+
+      if (t.linked) {
+        // Ocupada por otra pareja: dejar elegirla robaría el vínculo ajeno.
+        btn.disabled = true;
+        btn.style.opacity = '.45';
+        btn.style.cursor = 'not-allowed';
+        btn.title = 'Ya vinculada a otra pestaña de trabajo';
+      } else {
+        btn.addEventListener('click', () => doLink('existing', t.id));
+      }
+
       existingList.appendChild(btn);
     });
 

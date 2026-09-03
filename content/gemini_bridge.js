@@ -187,7 +187,7 @@
     ].join(';');
     toggle.addEventListener('click', () => {
       autoEnabled = !autoEnabled;
-      chrome.storage.session.set({ gwb_auto_enabled: autoEnabled }).catch(() => {});
+      chrome.runtime.sendMessage({ action: 'set_pair_pref', prefs: { autoEnabled } }).catch(() => {});
       renderBar();
     });
 
@@ -208,7 +208,7 @@
     ].join(';');
     modeBtn.addEventListener('click', () => {
       captureMode = captureMode === 'visible' ? 'full' : 'visible';
-      chrome.storage.session.set({ gwb_capture_mode: captureMode }).catch(() => {});
+      chrome.runtime.sendMessage({ action: 'set_pair_pref', prefs: { captureMode } }).catch(() => {});
       renderBar();
     });
 
@@ -475,7 +475,7 @@
         composer.dispatchEvent(new Event('input', { bubbles: true }));
       }
       primed = true;
-      chrome.storage.session.set({ gwb_primed: true }).catch(() => {});
+      chrome.runtime.sendMessage({ action: 'set_pair_pref', prefs: { primed: true } }).catch(() => {});
     }
 
     renderBar('📎 Adjuntando…');
@@ -599,11 +599,15 @@
 
   (async () => {
     try {
-      const stored = await chrome.storage.session.get(['gwb_auto_enabled', 'gwb_work_tab_title', 'gwb_capture_mode', 'gwb_primed']);
-      autoEnabled = stored.gwb_auto_enabled !== false;
-      workTabTitle = stored.gwb_work_tab_title || '';
-      captureMode = stored.gwb_capture_mode === 'full' ? 'full' : 'visible';
-      primed = stored.gwb_primed === true;
+      // Los ajustes son de ESTA pareja. Con varios vínculos abiertos, unas
+      // claves globales harían que unos se pisaran los ajustes de otros.
+      const pref = await chrome.runtime.sendMessage({ action: 'get_pair_pref' });
+      if (pref && !pref.missing) {
+        autoEnabled = pref.autoEnabled !== false;
+        captureMode = pref.captureMode === 'full' ? 'full' : 'visible';
+        primed = pref.primed === true;
+        workTabTitle = pref.workTitle || '';
+      }
     } catch (e) { /* valores por defecto */ }
     renderBar();
   })();
