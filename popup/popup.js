@@ -102,18 +102,37 @@ document.addEventListener('DOMContentLoaded', () => {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'chooser-option';
-      btn.title = t.title;
+      btn.title = t.title || 'Gemini';
 
       const icon = document.createElement('span');
       icon.className = 'chooser-icon';
       icon.textContent = '↳';
 
+      // El título de pestaña es "Google Gemini" en todas, así que aquí llega ya
+      // el nombre de la conversación o su primer mensaje. Cuando no hay ni una
+      // cosa ni la otra, se dice que está vacía en vez de repetir un genérico.
+      const nombre = t.title && t.title !== 'Google Gemini' && t.title !== 'Gemini'
+        ? t.title
+        : 'Conversación sin mensajes';
+
+      const wrap = document.createElement('span');
+      wrap.className = 'chooser-lines';
+
       const label = document.createElement('span');
       label.className = 'chooser-label';
-      label.textContent = t.linked ? `${t.title} (ya vinculada)` : t.title;
+      label.textContent = t.linked ? `${nombre} (ya vinculada)` : nombre;
+      wrap.appendChild(label);
+
+      // Desempate para conversaciones que se parezcan: el final de su id.
+      if (t.hint) {
+        const hint = document.createElement('span');
+        hint.className = 'chooser-hint';
+        hint.textContent = `#${t.hint}`;
+        wrap.appendChild(hint);
+      }
 
       btn.appendChild(icon);
-      btn.appendChild(label);
+      btn.appendChild(wrap);
 
       if (t.linked) {
         // Ocupada por otra pareja: dejar elegirla robaría el vínculo ajeno.

@@ -184,6 +184,20 @@ body {
   color: #4E8CFF;
 }
 
+.chooser-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.chooser-hint {
+  font-size: 9.5px;
+  color: var(--text-muted, #64748B);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.02em;
+}
+
 .chooser-label {
   overflow: hidden;
   text-overflow: ellipsis;

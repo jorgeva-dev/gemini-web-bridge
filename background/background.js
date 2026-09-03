@@ -189,12 +189,66 @@ async function listGeminiTabs() {
     chrome.tabs.query({ url: '*://gemini.google.com/*' }),
     readLinks()
   ]);
-  return tabs.map((t) => ({
+
+  // El título de la pestaña es "Google Gemini" en todas, así que no distingue
+  // nada: con tres conversaciones abiertas el selector mostraba tres opciones
+  // idénticas. La etiqueta útil hay que sacarla de dentro de la página.
+  const etiquetas = await Promise.all(tabs.map((t) => describeGeminiTab(t.id)));
+
+  return tabs.map((t, i) => ({
     id: t.id,
-    title: t.title || 'Gemini',
+    title: etiquetas[i] || t.title || 'Gemini',
+    hint: chatIdFromUrl(t.url),
     active: Boolean(t.active),
     linked: Boolean(links[String(t.id)])
   }));
+}
+
+/** Últimos caracteres del id de conversación, como desempate visible. */
+function chatIdFromUrl(url) {
+  const m = (url || '').match(/\/app\/([A-Za-z0-9_-]+)/);
+  return m ? m[1].slice(-6) : '';
+}
+
+/**
+ * Extrae una etiqueta legible de una pestaña de Gemini: el nombre de la
+ * conversación si lo tiene, y si no su primer mensaje. Los selectores son de
+ * Gemini y pueden cambiar, así que hay varios candidatos y varios respaldos:
+ * fallar aquí sólo debe costar una etiqueta peor, nunca romper el listado.
+ * @param {number} tabId
+ * @returns {Promise<string|null>}
+ */
+async function describeGeminiTab(tabId) {
+  try {
+    const res = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const limpiar = (s) => (s || '').replace(/\s+/g, ' ').trim();
+        const recortar = (s) => (s.length > 48 ? s.slice(0, 45) + '…' : s);
+
+        // 1. Conversación seleccionada en la barra lateral
+        const seleccionada = document.querySelector(
+          '.conversation.selected .conversation-title, [class*="conversation"][class*="selected"] [class*="title"]'
+        );
+        const nombre = limpiar(seleccionada && seleccionada.textContent);
+        if (nombre) return recortar(nombre);
+
+        // 2. Primer mensaje del usuario en el hilo
+        const primero = document.querySelector(
+          'user-query .query-text, [data-test-id="user-query"], user-query'
+        );
+        const texto = limpiar(primero && primero.textContent);
+        if (texto) return recortar(texto);
+
+        // 3. Sin mensajes todavía
+        return null;
+      }
+    });
+    return (res && res[0] && res[0].result) || null;
+  } catch (err) {
+    // Pestaña descartada, aún cargando o restringida: no es un error grave.
+    return null;
+  }
 }
 
 /**
