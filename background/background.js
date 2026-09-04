@@ -47,6 +47,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then((tabs) => sendResponse({ tabs }))
       .catch(() => sendResponse({ tabs: [] }));
     return true;
+  } else if (message.action === 'toggle_badges') {
+    toggleBadgesInTab(sender.tab && sender.tab.id)
+      .then((on) => sendResponse({ on }))
+      .catch(() => sendResponse({ on: false }));
+    return true;
   } else if (message.action === 'get_pair_pref') {
     // El puente sólo necesita saber a qué pestaña está enlazado, para el cartel.
     getPairByGeminiTab(sender.tab && sender.tab.id)
@@ -295,6 +300,7 @@ async function linkTabs({ mode = 'new', geminiTabId = null } = {}) {
   });
 
   await injectBridge(geminiTab.id, workTab.title || '');
+  await injectWorkPanel(workTab.id, geminiTab.title || 'Gemini');
 
   await chrome.tabs.update(geminiTab.id, { active: true });
   await chrome.windows.update(geminiTab.windowId, { focused: true }).catch(() => {});
@@ -366,8 +372,24 @@ async function injectBridge(geminiTabId, workTabTitle) {
 // Si una pestaña de Gemini vinculada se recarga, su puente desaparece con ella.
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (changeInfo.status !== 'complete') return;
-  const pair = await getPairByGeminiTab(tabId);
-  if (pair) await injectBridge(tabId, pair.workTitle || '');
+
+  const gemini = await getPairByGeminiTab(tabId);
+  if (gemini) {
+    await injectBridge(tabId, gemini.workTitle || '');
+    return;
+  }
+
+  // La pestaña de trabajo también pierde su panel al recargar o al navegar.
+  const links = await readLinks();
+  const pair = Object.values(links).find((p) => p.workTabId === tabId);
+  if (pair) {
+    let titulo = 'Gemini';
+    try {
+      const g = await chrome.tabs.get(pair.geminiTabId);
+      titulo = g.title || 'Gemini';
+    } catch (e) { /* se usará el genérico */ }
+    await injectWorkPanel(tabId, titulo);
+  }
 });
 
 // Al cerrarse cualquiera de los dos lados, sólo cae ESA pareja. Las demás siguen.
@@ -405,6 +427,9 @@ async function unlinkTabs(tabId = null) {
   } catch (err) {
     console.warn('[Gemini Bridge] No se pudieron quitar las insignias al desvincular:', err.message);
   }
+
+  // ...sin panel flotante en ella...
+  chrome.tabs.sendMessage(pair.workTabId, { action: 'work_panel_remove' }).catch(() => {});
 
   // ...y sin píldora en la de Gemini.
   chrome.tabs.sendMessage(pair.geminiTabId, { action: 'bridge_unlink' }).catch(() => {});
@@ -494,6 +519,56 @@ chrome.commands.onCommand.addListener(async (command) => {
     await clearBadgesInActiveTab();
   }
 });
+
+/**
+ * Pone o quita las insignias de una pestaña según cómo esté ahora. Lo usa el
+ * panel flotante de la pestaña de trabajo.
+ * @param {number} tabId
+ * @returns {Promise<boolean>} si han quedado puestas
+ */
+async function toggleBadgesInTab(tabId) {
+  if (!tabId) return false;
+  try {
+    const res = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => Boolean(document.getElementById('gwb-badge-layer'))
+    });
+    const puestas = Boolean(res && res[0] && res[0].result);
+
+    if (puestas) {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => { if (typeof window.__gwbClearBadges === 'function') window.__gwbClearBadges(); }
+      });
+      return false;
+    }
+
+    await paintBadgesInTab(tabId);
+    return true;
+  } catch (err) {
+    console.warn('[Gemini Bridge] No se pudieron alternar las insignias:', err.message);
+    return false;
+  }
+}
+
+/**
+ * Inyecta el panel flotante en la pestaña de trabajo y le dice a qué
+ * conversación está enlazada.
+ */
+async function injectWorkPanel(workTabId, geminiTitle) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: workTabId },
+      files: ['content/work_panel.js']
+    });
+    await chrome.tabs.sendMessage(workTabId, {
+      action: 'work_panel_status',
+      geminiTitle
+    }).catch(() => {});
+  } catch (err) {
+    console.warn('[Gemini Bridge] No se pudo inyectar el panel de trabajo:', err.message);
+  }
+}
 
 /**
  * Vuelve a numerar la pestaña activa. Las insignias se colocan en coordenadas
@@ -1106,6 +1181,21 @@ async function executeGeminiInjection(dataUrl) {
 
   try {
     const inputElement = await waitForGeminiInput();
+
+    // Si ya hay una captura puesta y sin enviar, no se apila otra encima. El
+    // usuario tenía que quitarlas a mano cuando el widget se disparaba dos
+    // veces o quedaba un adjunto de un envío anterior.
+    const ambito = inputElement.closest('form') ||
+                   inputElement.closest('[class*="input-area"], [class*="composer"], [class*="bottom-container"]') ||
+                   inputElement.parentElement;
+    const yaHayAdjunto = ambito && ambito.querySelector(
+      'img[src^="blob:"], [data-test-id*="file"], [class*="attachment"], [class*="uploader"] img'
+    );
+    if (yaHayAdjunto) {
+      console.warn('[Gemini Bridge] Ya había una captura sin enviar: no se añade otra.');
+      placeCursorAtEnd(inputElement);
+      return;
+    }
     inputElement.focus();
 
     // Crear File y DataTransfer
