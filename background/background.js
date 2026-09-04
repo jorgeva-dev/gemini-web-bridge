@@ -47,16 +47,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then((tabs) => sendResponse({ tabs }))
       .catch(() => sendResponse({ tabs: [] }));
     return true;
-  } else if (message.action === 'set_pair_pref') {
-    setPairPref(sender.tab && sender.tab.id, message.prefs)
-      .then(() => sendResponse({ ok: true }))
-      .catch(() => sendResponse({ ok: false }));
-    return true;
   } else if (message.action === 'get_pair_pref') {
+    // El puente sólo necesita saber a qué pestaña está enlazado, para el cartel.
     getPairByGeminiTab(sender.tab && sender.tab.id)
-      .then((pair) => sendResponse(pair
-        ? { autoEnabled: pair.autoEnabled !== false, captureMode: pair.captureMode || 'visible', primed: pair.primed === true, workTitle: pair.workTitle || '' }
-        : { missing: true }))
+      .then((pair) => sendResponse(pair ? { workTitle: pair.workTitle || '' } : { missing: true }))
       .catch(() => sendResponse({ missing: true }));
     return true;
   } else if (message.action === 'unlink_tabs') {
@@ -68,13 +62,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     getLinkStatus()
       .then((res) => sendResponse(res))
       .catch(() => sendResponse({ linked: false }));
-    return true;
-  } else if (message.action === 'request_capture') {
-    // sender.tab.id identifica qué conversación pide la captura: así cada
-    // pareja resuelve su propia pestaña de trabajo sin estado compartido.
-    captureLinkedWorkTab(message.mode, sender.tab && sender.tab.id)
-      .then((res) => sendResponse(res))
-      .catch((err) => sendResponse({ error: err.message }));
     return true;
   }
 });
@@ -134,13 +121,12 @@ chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_AND_UNTRUSTED_CONT
  * forma de trabajar con dos temas a la vez ni en dos ventanas.
  *
  * Ahora se guarda un registro de parejas indexado por el id de la pestaña de
- * Gemini. Esa clave no es arbitraria: cuando el puente pide una captura, el
- * mensaje ya viene con `sender.tab.id`, así que cada conversación de Gemini
- * resuelve su propia pestaña de trabajo sin consultar ningún estado compartido.
+ * Gemini. Esa clave no es arbitraria: los mensajes que llegan desde una pestaña
+ * traen `sender.tab.id`, así que cada conversación se identifica sola sin
+ * consultar ningún estado compartido.
  *
  * Forma de cada pareja:
- *   { workTabId, workTitle, geminiTabId, groupId,
- *     lastCapturedUrl, primed, autoEnabled, captureMode, lastError }
+ *   { workTabId, workTitle, geminiTabId, groupId, lastError }
  */
 
 const GEMINI_URL = 'https://gemini.google.com/app';
@@ -305,10 +291,6 @@ async function linkTabs({ mode = 'new', geminiTabId = null } = {}) {
     workTitle: workTab.title || 'pestaña de trabajo',
     geminiTabId: geminiTab.id,
     groupId,
-    lastCapturedUrl: null,
-    primed: false,
-    autoEnabled: true,
-    captureMode: 'visible',
     lastError: null
   });
 
@@ -430,21 +412,6 @@ async function unlinkTabs(tabId = null) {
   await deletePair(pair.geminiTabId);
 }
 
-/**
- * Guarda las preferencias del puente (auto, alcance, explicación enviada) en
- * SU pareja. Antes vivían en claves planas compartidas, así que dos vínculos
- * abiertos a la vez se pisaban los ajustes.
- * @param {number} geminiTabId
- * @param {object} prefs
- */
-async function setPairPref(geminiTabId, prefs = {}) {
-  const pair = await getPairByGeminiTab(geminiTabId);
-  if (!pair) return;
-  if (typeof prefs.autoEnabled === 'boolean') pair.autoEnabled = prefs.autoEnabled;
-  if (prefs.captureMode === 'visible' || prefs.captureMode === 'full') pair.captureMode = prefs.captureMode;
-  if (typeof prefs.primed === 'boolean') pair.primed = prefs.primed;
-  await savePair(pair);
-}
 
 /**
  * Estado del vínculo DE LA PESTAÑA ACTIVA. Con varias parejas abiertas, el
@@ -480,84 +447,8 @@ async function getLinkStatus() {
   };
 }
 
-/**
- * Captura la pestaña de trabajo de la pareja que hace la petición.
- * @param {'visible'|'full'} requestedMode
- * @param {number} geminiTabId  pestaña que pide la captura (sender.tab.id)
- */
-async function captureLinkedWorkTab(requestedMode = 'visible', geminiTabId = null) {
-  const pair = geminiTabId ? await getPairByGeminiTab(geminiTabId) : null;
-  if (!pair) return { error: 'Esta conversación no tiene ninguna pestaña vinculada.' };
-
-  let workTab;
-  try {
-    workTab = await chrome.tabs.get(pair.workTabId);
-  } catch (e) {
-    await deletePair(pair.geminiTabId);
-    return { error: 'La pestaña vinculada ya no existe.' };
-  }
-
-  // La página completa se manda si se pide, o la primera vez sobre cada URL.
-  const urlChanged = workTab.url !== pair.lastCapturedUrl;
-  const mode = (requestedMode === 'full' || urlChanged) ? 'scroll' : 'visible';
-
-  // captureVisibleTab sólo fotografía la pestaña ACTIVA de su ventana, así que
-  // hay que traer al frente la de trabajo y devolver el foco después.
-  const [tabToRestore] = await chrome.tabs.query({ active: true, windowId: workTab.windowId });
-  const mustSwitch = !workTab.active;
-
-  let result = { dataUrl: null, error: null };
-  try {
-    if (mustSwitch) {
-      try {
-        await chrome.tabs.update(workTab.id, { active: true });
-      } catch (err) {
-        return { error: `no se pudo activar la pestaña de trabajo: ${err.message}` };
-      }
-      await new Promise((r) => setTimeout(r, 250));
-    }
-
-    result = mode === 'scroll'
-      ? await captureScrollOfTab(workTab)
-      : await captureVisibleOfTab(workTab);
-  } catch (err) {
-    result = { dataUrl: null, error: `excepción en la captura: ${err.message}` };
-  } finally {
-    if (mustSwitch && tabToRestore && tabToRestore.id) {
-      await chrome.tabs.update(tabToRestore.id, { active: true }).catch(() => {});
-    }
-  }
-
-  if (!result || !result.dataUrl) {
-    const detalle = (result && result.error) || 'motivo desconocido';
-    console.error(`[Gemini Bridge] Captura fallida (modo ${mode}) en "${workTab.title}": ${detalle}`);
-    pair.lastError = `modo ${mode}: ${detalle}`;
-    await savePair(pair);
-    return { error: `modo ${mode} — ${detalle}` };
-  }
-
-  pair.lastCapturedUrl = workTab.url;
-  pair.lastError = null;
-  await savePair(pair);
-
-  return { dataUrl: result.dataUrl, mode };
-}
 
 
-/**
- * Captura sólo el área visible de una pestaña concreta, numerándola antes.
- */
-async function captureVisibleOfTab(tab) {
-  try {
-    await paintBadgesInTab(tab.id);
-    const dataUrl = await captureVisibleThrottled(tab.windowId, { format: 'png' });
-    if (!dataUrl) return { dataUrl: null, error: 'captureVisibleTab no devolvió imagen' };
-    return { dataUrl, error: null };
-  } catch (err) {
-    console.error('[Gemini Bridge] Error en captura visible de la pestaña vinculada:', err);
-    return { dataUrl: null, error: `captureVisibleTab: ${err.message}` };
-  }
-}
 
 /**
  * Numera los elementos interactivos de la pestaña antes de capturar.
@@ -1075,18 +966,34 @@ async function sendToGemini(dataUrl, sourceTab) {
       return;
     }
 
-    // 2. Calcular el índice de la pestaña inmediatamente a la derecha
-    const targetIndex = currentTab.index + 1;
+    // 2. Destino: la conversación VINCULADA a esta pestaña. Antes se mandaba
+    // siempre a "la pestaña de la derecha", heurística que ignoraba el vínculo
+    // y que con varios vínculos abiertos acertaba de casualidad.
+    let targetTab = null;
+    const pair = await getPairForTab(currentTab.id);
 
-    // 3. Buscar la pestaña en esa posición exacta en la misma ventana
-    const [targetTab] = await chrome.tabs.query({ index: targetIndex, windowId: currentTab.windowId });
+    if (pair) {
+      try {
+        targetTab = await chrome.tabs.get(pair.geminiTabId);
+      } catch (e) {
+        targetTab = null;
+      }
+    }
+
+    // 3. Sin vínculo, se conserva el comportamiento antiguo como respaldo.
+    if (!targetTab) {
+      const [vecina] = await chrome.tabs.query({
+        index: currentTab.index + 1,
+        windowId: currentTab.windowId
+      });
+      targetTab = vecina || null;
+    }
 
     if (!targetTab) {
-      console.error("No hay ninguna pestaña a la derecha.");
-      // Avisar al usuario en la pestaña actual
+      console.error('[Gemini Bridge] Sin destino: ni vínculo ni pestaña a la derecha.');
       await chrome.scripting.executeScript({
         target: { tabId: currentTab.id },
-        func: () => alert("Gemini Web Bridge:\nNo se encontró ninguna pestaña abierta inmediatamente a la derecha.")
+        func: () => alert('Gemini Web Bridge:\n\nEsta pestaña no está vinculada a ninguna conversación de Gemini, y no hay ninguna pestaña a su derecha.\n\nVincúlala desde el widget.')
       }).catch(() => {});
       return;
     }
